@@ -157,6 +157,7 @@ const EquipmentMarketplace = lazy(() => import("./routes/equipment"));
 =======
 const Wrapped2026 = lazy(() => import("./routes/wrapped.2026"));
 const SkillSwapMarketplace = lazy(() => import("./routes/skill-swap"));
+const SmartMapsHub = lazy(() => import("./pages/navigation/SmartMapsHub"));
 >>>>>>> Stashed changes
 const ReferralDashboardRoute = lazy(() => import("./pages/ReferralDashboard"));
 const ReferralLeaderboardRoute = lazy(() => import("./pages/ReferralLeaderboard"));
@@ -379,6 +380,7 @@ const router = createBrowserRouter(
 =======
           <Route path="/wrapped/2026" element={<Wrapped2026 />} />
           <Route path="/skill-swap" element={<SkillSwapMarketplace />} />
+            <Route path="/smart-maps" element={<SmartMapsHub />} />
 >>>>>>> Stashed changes
           <Route path="/unsubscribe" element={<UnsubscribeRoute />} />
           {/* Catch-all route for 404 errors */}
