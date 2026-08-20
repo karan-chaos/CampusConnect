@@ -34,6 +34,7 @@ import {
   PIPELINE_ORDER,
 } from "../../components/career/ApplicationTracker";
 import { CareerFairCard } from "../../components/career/CareerFairSchedule";
+import ResumeBuilder from "../../components/career/ResumeBuilder";
 import {
   useCareerSearch,
   useApplicationTracker,
@@ -575,7 +576,7 @@ const MOCK_CAREER_FAIRS: CareerFairEvent[] = [
 
 export default function CampusCareerHub() {
   // ─── State ─────────────────────────────────────────────────────────────
-  const [activeTab, setActiveTab] = useState<"jobs" | "applications" | "fairs">("jobs");
+  const [activeTab, setActiveTab] = useState<"jobs" | "applications" | "fairs" | "resume">("jobs");
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [jobs, setJobs] = useState<JobListing[]>(MOCK_JOBS);
   const [applications, setApplications] = useState<Application[]>(MOCK_APPLICATIONS);
@@ -741,6 +742,12 @@ export default function CampusCareerHub() {
       label: "Career Fairs",
       icon: <Calendar className="w-4 h-4" />,
       count: filteredEvents.length,
+    },
+    {
+      id: "resume" as const,
+      label: "Resume Builder",
+      icon: <FileText className="w-4 h-4" />,
+      count: 0,
     },
   ];
 
@@ -1174,6 +1181,13 @@ export default function CampusCareerHub() {
                 />
               ))}
             </div>
+          </div>
+        )}
+
+        {/* ════════ RESUME BUILDER TAB ════════ */}
+        {activeTab === "resume" && (
+          <div>
+            <ResumeBuilder />
           </div>
         )}
       </div>
