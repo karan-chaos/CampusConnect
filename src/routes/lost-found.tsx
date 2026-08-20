@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { SiteShell } from "@/components/site/SiteShell";
 import { useAuthHydration } from "@/hooks/useAuthHydration";
@@ -17,6 +17,9 @@ import Loader2 from "lucide-react/dist/esm/icons/loader-2";
 import Coins from "lucide-react/dist/esm/icons/coins";
 import QrCode from "lucide-react/dist/esm/icons/qr-code";
 import Scan from "lucide-react/dist/esm/icons/scan";
+import BarChart3 from "lucide-react/dist/esm/icons/bar-chart-3";
+import ChevronDown from "lucide-react/dist/esm/icons/chevron-down";
+import ChevronUp from "lucide-react/dist/esm/icons/chevron-up";
 import { QRCodeSVG } from "qrcode.react";
 import { Html5QrcodeScanner } from "html5-qrcode";
 import { Button } from "@/components/ui/button";
@@ -36,6 +39,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useQuery, useMutation } from "@/hooks/useReactQueryReplacement";
+
+// ─── New Components ───────────────────────────────────────────────────────────
+import LostFoundImageUploader from "@/components/lost-found/LostFoundImageUploader";
+import LostFoundStatsPanel from "@/components/lost-found/LostFoundStatsPanel";
+import LostFoundItemDetailModal from "@/components/lost-found/LostFoundItemDetailModal";
+import LostFoundNotificationBell from "@/components/lost-found/LostFoundNotificationBell";
+import ViewToggle, { LostFoundListItem, type ViewMode } from "@/components/lost-found/LostFoundViewToggle";
+import { LostFoundMapView } from "@/components/lost-found/LostFoundMapView";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -90,6 +101,10 @@ interface NewItemForm {
   location: string;
   contact_info: string;
   bounty_amount: number;
+  image_url: string | null;
+  lat: number | null;
+  lng: number | null;
+  floor_details: string;
 }
 
 const EMPTY_FORM: NewItemForm = {
@@ -100,6 +115,10 @@ const EMPTY_FORM: NewItemForm = {
   location: "",
   contact_info: "",
   bounty_amount: 0,
+  image_url: null,
+  lat: null,
+  lng: null,
+  floor_details: "",
 };
 
 // ─── Badge helpers ─────────────────────────────────────────────────────────────
@@ -539,6 +558,33 @@ function NewItemDialog({
             />
           </div>
 
+          {/* Floor / Room Details */}
+          <div className="flex flex-col gap-1">
+            <label htmlFor="lf-floor" className="text-xs font-bold uppercase tracking-wider">
+              Floor / Room (optional)
+            </label>
+            <Input
+              id="lf-floor"
+              placeholder="e.g. 3rd floor, Room 302"
+              value={form.floor_details}
+              onChange={(e) => setForm((f) => ({ ...f, floor_details: e.target.value }))}
+              className="border-2 border-black font-mono"
+              maxLength={120}
+            />
+          </div>
+
+          {/* Image Upload */}
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-bold uppercase tracking-wider">
+              Photo (optional)
+            </label>
+            <LostFoundImageUploader
+              currentImageUrl={form.image_url}
+              onImageUploaded={(url) => setForm((f) => ({ ...f, image_url: url }))}
+              onImageRemoved={() => setForm((f) => ({ ...f, image_url: null }))}
+            />
+          </div>
+
           {/* Token Bounty (Only for Lost Items) */}
           {form.type === "lost" && (
             <div className="flex flex-col gap-1 rounded-lg border-2 border-black bg-cream p-3">
@@ -617,6 +663,9 @@ export default function LostFoundPage() {
   const [typeFilter, setTypeFilter] = useState<ItemType | "all">("all");
   const [categoryFilter, setCategoryFilter] = useState<ItemCategory | "all">("all");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>("grid");
+  const [showStats, setShowStats] = useState(false);
+  const [selectedDetailItem, setSelectedDetailItem] = useState<LostFoundItem | null>(null);
 
   // ── Fetch items ──────────────────────────────────────────────────────────────
   const {
@@ -655,7 +704,7 @@ export default function LostFoundPage() {
         p_location: form.location.trim() || null,
         p_contact_info: form.contact_info.trim() || null,
         p_bounty_amount: form.type === "lost" ? form.bounty_amount : 0,
-        p_image_url: null, // Modify if implementing image upload
+        p_image_url: form.image_url || null,
       });
       if (error) throw error;
     },
@@ -788,16 +837,28 @@ export default function LostFoundPage() {
                 Report something you've lost or help reunite others with their belongings.
               </p>
             </div>
-            <Button
-              onClick={() => setDialogOpen(true)}
-              disabled={!user}
-              className="neu-border bg-lime font-mono font-black uppercase text-black hover:bg-lime/80 disabled:opacity-50"
-              id="post-item-btn"
-              title={!user ? "Sign in to post an item" : undefined}
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              Post Item
-            </Button>
+            <div className="flex items-center gap-3">
+              <LostFoundNotificationBell />
+              <Button
+                onClick={() => setShowStats(!showStats)}
+                variant="outline"
+                className="border-2 border-black font-mono text-xs font-black uppercase"
+              >
+                <BarChart3 className="mr-1 h-4 w-4" />
+                {showStats ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                Stats
+              </Button>
+              <Button
+                onClick={() => setDialogOpen(true)}
+                disabled={!user}
+                className="neu-border bg-lime font-mono font-black uppercase text-black hover:bg-lime/80 disabled:opacity-50"
+                id="post-item-btn"
+                title={!user ? "Sign in to post an item" : undefined}
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                Post Item
+              </Button>
+            </div>
           </div>
 
           {/* Stats strip */}
@@ -814,6 +875,13 @@ export default function LostFoundPage() {
             </span>
           </div>
         </header>
+
+        {/* Stats Panel (Collapsible) */}
+        {showStats && (
+          <section aria-label="Statistics" className="mb-6">
+            <LostFoundStatsPanel items={filteredItems} isLoading={isLoading} />
+          </section>
+        )}
 
         {/* Filters */}
         <section aria-label="Filters" className="mb-6 flex flex-wrap items-center gap-3">
@@ -879,6 +947,8 @@ export default function LostFoundPage() {
               ))}
             </SelectContent>
           </Select>
+          {/* View Toggle */}
+          <ViewToggle active={viewMode} onChange={setViewMode} />
         </section>
 
         {/* Items grid */}
@@ -910,6 +980,22 @@ export default function LostFoundPage() {
                 </Button>
               )}
             </div>
+          ) : viewMode === "map" ? (
+            <LostFoundMapView
+              items={filteredItems}
+              onSelectCard={(item) => setSelectedDetailItem(item)}
+              className="rounded-xl border-2 border-black overflow-hidden"
+            />
+          ) : viewMode === "list" ? (
+            <div className="flex flex-col gap-3">
+              {filteredItems.map((item) => (
+                <LostFoundListItem
+                  key={item.id}
+                  item={item}
+                  onSelect={() => setSelectedDetailItem(item)}
+                />
+              ))}
+            </div>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {filteredItems.map((item) => (
@@ -936,6 +1022,16 @@ export default function LostFoundPage() {
         onSubmit={(form) => createItem(form)}
         isSubmitting={isCreating}
       />
+
+      {/* Item Detail Modal */}
+      {selectedDetailItem && (
+        <LostFoundItemDetailModal
+          item={selectedDetailItem}
+          open={!!selectedDetailItem}
+          onClose={() => setSelectedDetailItem(null)}
+          onRefresh={refetch}
+        />
+      )}
     </SiteShell>
   );
 }
