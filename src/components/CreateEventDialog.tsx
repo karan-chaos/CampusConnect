@@ -87,6 +87,9 @@ import {
   DEFAULT_GEOFENCE_RADIUS_METERS,
 } from "@/components/GeofenceMapPicker";
 import { VenueWifiOverlay } from "@/components/venue/VenueWifiOverlay";
+import { RecurrenceSelector } from "@/components/RecurrenceSelector";
+import { generateInstances } from "@/services/recurrenceService";
+import type { RecurrenceConfig } from "@/services/recurrenceService";
 
 const STEPS = [
   { label: "Details", fields: ["title", "description"] as const },
@@ -156,6 +159,8 @@ export function CreateEventDialog({
   const [conflicts, setConflicts] = useState<EventConflict[]>([]);
   const [isCheckingConflicts, setIsCheckingConflicts] = useState(false);
   const [showConflictWizard, setShowConflictWizard] = useState(false);
+  const [recurrenceRule, setRecurrenceRule] = useState<string | null>(null);
+  const [recurrenceConfig, setRecurrenceConfig] = useState<RecurrenceConfig | null>(null);
   const navigate = useNavigate();
   const supabase = createClient();
   const isOnline = useOnlineStatus();
@@ -394,14 +399,49 @@ export function CreateEventDialog({
       try {
         const { data: createdData, error } = await supabase
           .from("events")
-          .insert(payload)
+          .insert({ ...payload, recurrence_rule: recurrenceRule || null })
           .select(
-            "id, status, event_date, start_date, max_attendees, capacity, has_catering, has_food, tags",
+            "id, status, event_date, start_date, end_date, max_attendees, capacity, has_catering, has_food, tags",
           )
           .single();
 
         if (error) {
           throw new Error(error.message);
+        }
+
+        // If recurring, generate and insert all instances as children
+        if (
+          recurrenceRule &&
+          recurrenceConfig &&
+          createdData?.id &&
+          createdData.start_date &&
+          createdData.end_date
+        ) {
+          const dtStart = new Date(createdData.start_date);
+          const durationMs = new Date(createdData.end_date).getTime() - dtStart.getTime();
+          const instances = generateInstances(
+            {
+              title: payload.title,
+              description: payload.description,
+              location: payload.location,
+              banner_url: null,
+              club_id: clubId,
+              created_by: user.id,
+              category_id: payload.category_id,
+              tags: payload.tags || [],
+            },
+            recurrenceRule,
+            dtStart,
+            durationMs,
+          );
+          // Insert instances (skip the first one — that's the parent)
+          if (instances.length > 1) {
+            const childRows = instances.slice(1).map((inst) => ({
+              ...inst,
+              parent_event_id: createdData.id,
+            }));
+            await supabase.from("events").insert(childRows);
+          }
         }
 
         if (createdData?.id) {
@@ -452,6 +492,8 @@ export function CreateEventDialog({
       }
       form.reset(defaultValues);
       resetState(defaultValues);
+      setRecurrenceRule(null);
+      setRecurrenceConfig(null);
       setOpen(false);
     },
     onError: (error: Error) => {
@@ -672,7 +714,6 @@ export function CreateEventDialog({
                 </div>
               </div>
             )}
-
             {/* Step 1 — Details */}
             {step === 0 && (
               <>
@@ -832,11 +873,18 @@ export function CreateEventDialog({
                   )}
                 />
               </>
-            )}
-
+            )}{" "}
             {/* Step 2 — Logistics */}
             {step === 1 && (
               <>
+                <RecurrenceSelector
+                  startDate={startDateStr}
+                  value={recurrenceRule}
+                  onChange={(rule, config) => {
+                    setRecurrenceRule(rule);
+                    setRecurrenceConfig(config);
+                  }}
+                />
                 <FormField
                   control={control}
                   name="location"
@@ -1235,7 +1283,6 @@ export function CreateEventDialog({
                 </div>
               </>
             )}
-
             {/* Step 3 — Media & Ticketing */}
             {step === 2 && (
               <div className="space-y-6">
@@ -1387,7 +1434,6 @@ export function CreateEventDialog({
                 </p>
               </div>
             )}
-
             {/* Step 4 — Review (confirm) */}
             {step === 3 && (
               <>
@@ -1465,7 +1511,6 @@ export function CreateEventDialog({
                 />
               </>
             )}
-
             <div className="border-t-2 border-dashed border-black pt-4 mt-4 space-y-4">
               <p className="font-mono text-xs font-bold uppercase text-black">
                 Risk & Attendance Details
@@ -1519,7 +1564,6 @@ export function CreateEventDialog({
                 </FormControl>
               </FormItem>
             </div>
-
             <DialogFooter className="pt-2 flex gap-2">
               {step > 0 && (
                 <Button type="button" variant="outline" onClick={handleBack}>
