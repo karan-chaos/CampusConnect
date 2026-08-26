@@ -183,6 +183,8 @@ const AudioTourRoute = lazy(() => import("./routes/audio-tour"));
 const DynamicEarlyBirdAnalyticsRoute = lazy(
   () => import("./routes/events.$id.early-bird-analytics"),
 );
+const AchievementsPage = lazy(() => import("@/pages/AchievementsPage"));
+const EventFeedbackPage = lazy(() => import("@/pages/EventFeedbackPage"));
 
 // ---------------------------------------------------------------------------
 // Animated Outlet Wrapper for Framer Motion transitions with Skeleton Fallback
@@ -341,23 +343,8 @@ function AnimatedOutlet() {
 //                 <Route path="/admin/emergency-broadcast" element={<AdminEmergencyBroadcast />} />
 //                 <Route path="/admin/badges" element={<AdminBadgesPage />} />
 //                 <Route path="/unsubscribe" element={<UnsubscribeRoute />} />
-              <Route path=":slug/revive" element={<ReviveClubPage />} />
-            <Route path="/scavenger-hunts" element={<ScavengerHuntsList />} />
-            <Route path="/scavenger-hunts/:id" element={<ScavengerHuntGame />} />
-            <Route path="/explore" element={<ExploreShowcase />} />
-            <Route path="/tours/:tourId" element={<TourMode />} />
-            <Route path="/admin/clubs/revival-requests" element={<AdminRevivalRequestsPage />} />
-            <Route path="/admin/leadership-approvals" element={<AdminLeadershipApprovals />} />
-            <Route path="/admin/dlq" element={<AdminDlqPage />} />
-            <Route path="/admin/emergency-broadcast" element={<AdminEmergencyBroadcast />} />
-            <Route path="/admin/badges" element={<AdminBadgesPage />} />
-            <Route path="/equipment-rentals" element={<EquipmentMarketplace />} />
-            <Route path="/wrapped/2026" element={<Wrapped2026 />} />
-            <Route path="/skill-swap" element={<SkillSwapMarketplace />} />
-            <Route path="/wellness" element={<CampusWellnessHub />} />
-            <Route path="/study-groups" element={<StudyGroupsRoute />} />
-            <Route path="/unsubscribe" element={<UnsubscribeRoute />} />
-      <Route path="/gallery" element={<GalleryPage />} />
+                  <Route path="/achievements" element={<AchievementsPage />} />
+                  <Route path="/events/:eventId/reviews" element={<EventFeedbackPage />} />
 //                 <Route path="*" element={<NotFound />} />
 //               </Route>
 //             </Route>
@@ -574,6 +561,12 @@ const router = createBrowserRouter(
 
             {/* Wellness */}
             <Route path="/wellness" element={<CampusWellnessHub />} />
+
+            {/* Achievements */}
+            <Route path="/achievements" element={<AchievementsPage />} />
+
+            {/* Event Feedback / Reviews */}
+            <Route path="/events/:eventId/reviews" element={<EventFeedbackPage />} />
 
             {/* Email Verification */}
             <Route path="/verify-email" element={<VerifyEmail />} />
