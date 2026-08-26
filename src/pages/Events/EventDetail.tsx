@@ -1,3 +1,5 @@
+import { SafetyRollCallDashboard } from "@/components/events/SafetyRollCallDashboard";
+import { SafetyCheckPrompt } from "@/components/events/SafetyCheckPrompt";
 // =============================================================================
 // PATCH: src/pages/Events/EventDetail.tsx
 // Issue: #3678 — Real-Time "Micro-Volunteering" Task Board
