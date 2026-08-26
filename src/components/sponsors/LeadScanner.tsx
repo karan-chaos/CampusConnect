@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 import { createClient } from "@/lib/supabase/client";
 import { playSuccessBeep } from "@/lib/audio/beep";
+import { triggerReversePayload } from "@/lib/recruiterVCard";
 import { Button } from "@/components/ui/button";
 import { Loader2, ClipboardList } from "lucide-react";
 
@@ -37,9 +38,14 @@ export const LeadScanner: React.FC<LeadScannerProps> = ({
     success: boolean;
     message: string;
     attendeeName?: string;
+    studentUserId?: string;
   } | null>(null);
 
   const [isProcessing, setIsProcessing] = useState(false);
+  const [reversePayloadStatus, setReversePayloadStatus] = useState<{
+    sent: boolean;
+    message: string;
+  } | null>(null);
   const [notes, setNotes] = useState("");
 
   // 🔥 INTERCEPTOR STATE 🔥
@@ -189,6 +195,7 @@ export const LeadScanner: React.FC<LeadScannerProps> = ({
   const resetScanner = useCallback(async () => {
     setScanResult(null);
     setNotes("");
+    setReversePayloadStatus(null);
     if (scannerRef.current) {
       await scannerRef.current.resume();
     }
@@ -324,6 +331,16 @@ export const LeadScanner: React.FC<LeadScannerProps> = ({
             <p className="text-sm text-gray-600">{scanResult.message}</p>
             {scanResult.attendeeName && (
               <p className="font-medium mt-2">Attendee: {scanResult.attendeeName}</p>
+            )}
+            {reversePayloadStatus && (
+              <div
+                className={`mt-3 p-2 rounded-md text-xs ${reversePayloadStatus.sent ? "bg-blue-50 text-blue-800" : "bg-yellow-50 text-yellow-800"}`}
+              >
+                <Send className="w-3 h-3 inline mr-1" />
+                {reversePayloadStatus.sent
+                  ? "Digital business card sent to student!"
+                  : reversePayloadStatus.message}
+              </div>
             )}
             <Button
               onClick={resetScanner}

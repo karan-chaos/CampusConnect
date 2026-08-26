@@ -810,6 +810,16 @@ export default function ClubProfile() {
             <CrowdfundingCampaignSection clubId={club.id} />
           </div>
         </section>
+ feature/club-vitality-monitor-3949
+ feature/club-vitality-monitor-3949
+ feature/club-vitality-monitor-3949
+ feature/club-vitality-monitor-3949
+ feature/club-vitality-monitor-3949
+ feature/club-vitality-monitor-3949
+ feature/club-vitality-monitor-3949
+ feature/club-vitality-monitor-3949
+ feature/club-vitality-monitor-3949
+
  feature/election-coi-detector-3952
  feature/election-coi-detector-3952
  feature/election-coi-detector-3952
@@ -818,6 +828,7 @@ export default function ClubProfile() {
  feature/election-coi-detector-3952
  feature/election-coi-detector-3952
  feature/election-coi-detector-3952
+ main
 
  feature/rsvp-prereq-blocker-3946
  feature/rsvp-prereq-blocker-3946
