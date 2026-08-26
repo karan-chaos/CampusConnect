@@ -18,10 +18,17 @@ import WifiOff from "lucide-react/dist/esm/icons/wifi-off";
 import { toast } from "sonner";
 import type { User } from "@supabase/supabase-js";
 import type { DateRange } from "react-day-picker";
-import { legacyRoleToLevel } from "@/lib/clubPermissions";
 
 import format from "date-fns/format";
 import { createClient } from "@/lib/supabase/client";
+import {
+  checkOrganizerPostMortemGate,
+  searchClubPostMortems,
+  findHistoricalRetrospectiveSuggestions,
+  type PendingPostMortemEvent,
+  type EventPostMortem,
+} from "@/services/eventPostMortemService";
+import { PostMortemGatingModal } from "@/components/events/PostMortemGatingModal";
 import {
   eventFormSchema,
   TITLE_MAX_LENGTH,
@@ -37,14 +44,7 @@ import {
   type EventFormValues,
 } from "@/lib/eventUtils";
 import { EventLogisticsService } from "@/services/eventLogisticsService";
-import { getEventSpamErrorMessage, isPendingSpamReview } from "@/lib/eventSpam";
-import { isTechHeavyEvent, sortVenuesForEvent, type VenueWifiMetrics } from "@/lib/venueWifi";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
-import {
-  calendarEventTypeLabel,
-  findCampusCalendarConflicts,
-  type CampusCalendarEvent,
-} from "@/lib/campusCalendar";
 import { queueOfflineEvent } from "@/lib/offlineSync";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -86,10 +86,6 @@ import {
   MIN_GEOFENCE_RADIUS_METERS,
   DEFAULT_GEOFENCE_RADIUS_METERS,
 } from "@/components/GeofenceMapPicker";
-import { VenueWifiOverlay } from "@/components/venue/VenueWifiOverlay";
-import { RecurrenceSelector } from "@/components/RecurrenceSelector";
-import { generateInstances } from "@/services/recurrenceService";
-import type { RecurrenceConfig } from "@/services/recurrenceService";
 
 const STEPS = [
   { label: "Details", fields: ["title", "description"] as const },
@@ -137,7 +133,6 @@ const defaultValues: LocalEventFormValues = {
   isPrivate: false,
   tags: [],
   faqs: [],
-  ratingMetrics: [],
 };
 
 const DRAFT_KEY = "event_draft";
@@ -159,8 +154,6 @@ export function CreateEventDialog({
   const [conflicts, setConflicts] = useState<EventConflict[]>([]);
   const [isCheckingConflicts, setIsCheckingConflicts] = useState(false);
   const [showConflictWizard, setShowConflictWizard] = useState(false);
-  const [recurrenceRule, setRecurrenceRule] = useState<string | null>(null);
-  const [recurrenceConfig, setRecurrenceConfig] = useState<RecurrenceConfig | null>(null);
   const navigate = useNavigate();
   const supabase = createClient();
   const isOnline = useOnlineStatus();
@@ -187,18 +180,14 @@ export function CreateEventDialog({
     if (!user) return;
     supabase
       .from("club_members")
-      .select("club_id, club_roles (permissions_level)")
+      .select("club_id")
       .eq("user_id", user.id)
+      .eq("role", "admin")
       .eq("status", "approved")
+      .limit(1)
+      .single()
       .then(({ data }) => {
-        const adminClubs = (data ?? []).filter((m: Record<string, unknown>) => {
-          const cr = m["club_roles"] as
-            { permissions_level?: number }[] | { permissions_level?: number } | null;
-          const level = Array.isArray(cr) ? cr[0]?.permissions_level : cr?.permissions_level;
-          const legacyRole = m["role"] as string | undefined;
-          return (level ?? legacyRoleToLevel(legacyRole)) >= 40;
-        });
-        if (adminClubs.length > 0) setClubId(adminClubs[0].club_id as string);
+        if (data) setClubId(data.club_id);
       });
   }, [user]);
 
@@ -221,21 +210,6 @@ export function CreateEventDialog({
   const watchedTitle = form.watch("title");
   const watchedDescription = form.watch("description");
   const watchedVenueId = form.watch("venue_id");
-  const watchedTags = form.watch("tags") || [];
-  const watchedCategory = form.watch("category") || "";
-  const watchedMaxAttendees = form.watch("maxAttendees");
-  const isTechHeavy = isTechHeavyEvent(
-    watchedTags,
-    watchedCategory,
-    watchedTitle,
-    watchedDescription,
-  );
-  const selectedVenue = venues?.find((venue: VenueWifiMetrics) => venue.id === watchedVenueId);
-  const orderedVenues = sortVenuesForEvent(
-    (venues ?? []) as VenueWifiMetrics[],
-    isTechHeavy,
-    watchedMaxAttendees,
-  );
   const control = form.control as never;
 
   useEffect(() => {
@@ -277,6 +251,31 @@ export function CreateEventDialog({
 
     return () => window.clearTimeout(timer);
   }, [watchedTitle, watchedDescription, clubId]);
+
+  // Post-Mortem Gating & Historical Retrospective Suggestions
+  const [showGatingModal, setShowGatingModal] = useState(false);
+
+  const { data: gatingStatus, refetch: refetchGating } = useQuery({
+    queryKey: ["organizer_post_mortem_gate", user?.id, clubId],
+    queryFn: () => (user ? checkOrganizerPostMortemGate(user.id, clubId) : null),
+    enabled: Boolean(user && open),
+  });
+
+  const { data: pastRetrospectives } = useQuery<EventPostMortem[]>({
+    queryKey: ["club_past_retrospectives", clubId],
+    queryFn: () => (clubId ? searchClubPostMortems(clubId) : []),
+    enabled: Boolean(clubId && open),
+  });
+
+  const historicalSuggestions = useMemo(() => {
+    if (!pastRetrospectives || pastRetrospectives.length === 0) return [];
+    return findHistoricalRetrospectiveSuggestions(
+      String(watchedTitle || ""),
+      String(watchedDescription || ""),
+      pastRetrospectives,
+    );
+  }, [watchedTitle, watchedDescription, pastRetrospectives]);
+
   const isUndoingRedoingRef = useRef(false);
   const {
     state: undoableState,
@@ -287,6 +286,7 @@ export function CreateEventDialog({
   } = useUndoableState(defaultValues, 1000);
 
   const watchedValues = form.watch();
+  const watchedValuesJson = JSON.stringify(watchedValues);
 
   // Reset/initialize undoable state when the modal opens/closes
   useEffect(() => {
@@ -301,8 +301,11 @@ export function CreateEventDialog({
       isUndoingRedoingRef.current = false;
       return;
     }
-    setUndoableState(watchedValues);
-  }, [watchedValues, setUndoableState]);
+    const currentUndoableJson = JSON.stringify(undoableState);
+    if (watchedValuesJson !== currentUndoableJson) {
+      setUndoableState(JSON.parse(watchedValuesJson));
+    }
+  }, [watchedValuesJson, undoableState, setUndoableState]);
 
   // Sync undoableState back to form values
   useEffect(() => {
@@ -388,6 +391,13 @@ export function CreateEventDialog({
         throw new Error("You must be logged in to create an event.");
       }
 
+      if (gatingStatus?.is_locked && gatingStatus.pending_events?.length > 0) {
+        setShowGatingModal(true);
+        throw new Error(
+          `Event creation locked: You have ${gatingStatus.pending_count} pending post-mortem retrospective(s) to complete first.`,
+        );
+      }
+
       const payload = eventFormToDbPayload(values, user.id, clubId);
 
       // If user is currently offline, queue in IndexedDB & Background Sync immediately
@@ -399,49 +409,14 @@ export function CreateEventDialog({
       try {
         const { data: createdData, error } = await supabase
           .from("events")
-          .insert({ ...payload, recurrence_rule: recurrenceRule || null })
+          .insert(payload)
           .select(
-            "id, status, event_date, start_date, end_date, max_attendees, capacity, has_catering, has_food, tags",
+            "id, event_date, start_date, max_attendees, capacity, has_catering, has_food, tags",
           )
           .single();
 
         if (error) {
           throw new Error(error.message);
-        }
-
-        // If recurring, generate and insert all instances as children
-        if (
-          recurrenceRule &&
-          recurrenceConfig &&
-          createdData?.id &&
-          createdData.start_date &&
-          createdData.end_date
-        ) {
-          const dtStart = new Date(createdData.start_date);
-          const durationMs = new Date(createdData.end_date).getTime() - dtStart.getTime();
-          const instances = generateInstances(
-            {
-              title: payload.title,
-              description: payload.description,
-              location: payload.location,
-              banner_url: null,
-              club_id: clubId,
-              created_by: user.id,
-              category_id: payload.category_id,
-              tags: payload.tags || [],
-            },
-            recurrenceRule,
-            dtStart,
-            durationMs,
-          );
-          // Insert instances (skip the first one — that's the parent)
-          if (instances.length > 1) {
-            const childRows = instances.slice(1).map((inst) => ({
-              ...inst,
-              parent_event_id: createdData.id,
-            }));
-            await supabase.from("events").insert(childRows);
-          }
         }
 
         if (createdData?.id) {
@@ -452,10 +427,7 @@ export function CreateEventDialog({
           }
         }
 
-        return {
-          isOffline: false,
-          isPendingSpamReview: isPendingSpamReview(createdData?.status),
-        };
+        return { isOffline: false };
       } catch (err: unknown) {
         const isNetworkError =
           !navigator.onLine ||
@@ -477,10 +449,6 @@ export function CreateEventDialog({
           "Event saved offline! It will sync automatically when connectivity is restored.",
           { duration: 6000 },
         );
-      } else if (data?.isPendingSpamReview) {
-        toast.info("Event submitted for moderation review. It will stay hidden until approved.", {
-          duration: 7000,
-        });
       } else {
         toast.success("Event created!");
       }
@@ -492,14 +460,11 @@ export function CreateEventDialog({
       }
       form.reset(defaultValues);
       resetState(defaultValues);
-      setRecurrenceRule(null);
-      setRecurrenceConfig(null);
       setOpen(false);
     },
     onError: (error: Error) => {
       console.error("[CreateEventDialog] Failed to create event:", error);
-      const message = error.message || "Couldn't create the event. Please try again.";
-      toast.error(getEventSpamErrorMessage(error) ?? message);
+      toast.error(error.message || "Couldn't create the event. Please try again.");
     },
   });
 
@@ -541,28 +506,6 @@ export function CreateEventDialog({
   const startDateStr = form.watch("startDate");
   const endDateStr = form.watch("endDate");
 
-  const { data: campusCalendarEvents = [] } = useQuery({
-    queryKey: ["campusCalendarEvents", startDateStr, endDateStr],
-    queryFn: async (): Promise<CampusCalendarEvent[]> => {
-      const { data, error } = await supabase
-        .from("campus_calendar_events")
-        .select("id, title, start_date, end_date, type")
-        .lte("start_date", endDateStr)
-        .gte("end_date", startDateStr)
-        .order("start_date", { ascending: true });
-      if (error) throw error;
-      return (data ?? []) as CampusCalendarEvent[];
-    },
-    enabled: open && step === 1 && Boolean(startDateStr && endDateStr),
-    staleTime: 1000 * 60 * 15,
-  });
-
-  const campusCalendarConflicts = findCampusCalendarConflicts(
-    campusCalendarEvents,
-    startDateStr,
-    endDateStr,
-  );
-
   const parsedStart = startDateStr ? new Date(startDateStr) : undefined;
   const parsedEnd = endDateStr ? new Date(endDateStr) : undefined;
 
@@ -594,7 +537,10 @@ export function CreateEventDialog({
                   description: "Would you like to resume where you left off?",
                   action: {
                     label: "Resume",
-                    onClick: () => form.reset(draftValues),
+                    onClick: () => {
+                      form.reset(draftValues);
+                      resetState(draftValues);
+                    },
                   },
                 });
               }
@@ -714,6 +660,7 @@ export function CreateEventDialog({
                 </div>
               </div>
             )}
+
             {/* Step 1 — Details */}
             {step === 0 && (
               <>
@@ -748,6 +695,22 @@ export function CreateEventDialog({
                     </FormItem>
                   )}
                 />
+
+                {/* Historical Retrospective Institutional Memory Suggestions */}
+                {historicalSuggestions.length > 0 && (
+                  <div className="border-2 border-amber-500 bg-amber-50 p-3 shadow-[2px_2px_0_0_#000]">
+                    <div className="flex items-center gap-1.5 font-mono text-xs font-black uppercase text-amber-950 mb-1">
+                      <span>💡 Institutional Memory Tip</span>
+                    </div>
+                    <div className="space-y-1 font-mono text-[11px] text-amber-900">
+                      {historicalSuggestions.map((s, idx) => (
+                        <p key={idx}>
+                          • From <strong>{s.eventTitle}</strong> ({s.keyword}): &quot;{s.advice}&quot;
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <FormField
                   control={control}
                   name="category"
@@ -850,6 +813,33 @@ export function CreateEventDialog({
                 />
                 <FormField
                   control={control}
+                  name="dress_code"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Dress Code</FormLabel>
+                      <Select
+                        onValueChange={(val) => field.onChange(val === "none" ? "" : val)}
+                        value={field.value || "none"}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select event dress code (optional)" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="none">No Specific Dress Code</SelectItem>
+                          <SelectItem value="casual">Casual</SelectItem>
+                          <SelectItem value="smart_casual">Smart Casual</SelectItem>
+                          <SelectItem value="business_casual">Business Casual</SelectItem>
+                          <SelectItem value="formal">Formal</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={control}
                   name="isPrivate"
                   render={({ field }) => (
                     <FormItem className="neu-border flex items-center justify-between bg-white p-3 shadow-none">
@@ -873,18 +863,11 @@ export function CreateEventDialog({
                   )}
                 />
               </>
-            )}{" "}
+            )}
+
             {/* Step 2 — Logistics */}
             {step === 1 && (
               <>
-                <RecurrenceSelector
-                  startDate={startDateStr}
-                  value={recurrenceRule}
-                  onChange={(rule, config) => {
-                    setRecurrenceRule(rule);
-                    setRecurrenceConfig(config);
-                  }}
-                />
                 <FormField
                   control={control}
                   name="location"
@@ -942,13 +925,9 @@ export function CreateEventDialog({
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          {orderedVenues.map((v) => (
+                          {venues?.map((v: any) => (
                             <SelectItem key={v.id} value={v.id}>
-                              {v.name} ({v.capacity} capacity
-                              {isTechHeavy && v.max_device_capacity
-                                ? ` • Wi-Fi ${v.max_device_capacity} devices`
-                                : ""}
-                              )
+                              {v.name} ({v.capacity} capacity)
                             </SelectItem>
                           ))}
                           <SelectItem value="custom">Custom Location</SelectItem>
@@ -958,15 +937,6 @@ export function CreateEventDialog({
                     </FormItem>
                   )}
                 />
-
-                {watchedVenueId && watchedVenueId !== "custom" && (
-                  <VenueWifiOverlay
-                    venue={selectedVenue}
-                    venues={(venues ?? []) as VenueWifiMetrics[]}
-                    techHeavy={isTechHeavy}
-                    attendeeCount={watchedMaxAttendees}
-                  />
-                )}
 
                 {isCustomVenue && (
                   <>
@@ -1222,27 +1192,6 @@ export function CreateEventDialog({
                       {form.formState.errors.endDate.message}
                     </p>
                   )}
-                  {campusCalendarConflicts.length > 0 && (
-                    <div
-                      role="status"
-                      className="neu-border flex gap-3 bg-amber-200 p-3 text-sm text-black"
-                    >
-                      <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
-                      <div className="space-y-1">
-                        <p className="font-bold">Academic calendar conflict</p>
-                        {campusCalendarConflicts.map((conflict) => (
-                          <p key={conflict.id}>
-                            Warning: This date falls during <strong>{conflict.title}</strong>.
-                            Expected attendance may be impacted. (
-                            {calendarEventTypeLabel(conflict.type)})
-                          </p>
-                        ))}
-                        <p className="text-xs font-semibold">
-                          You can still create this event; this warning is advisory only.
-                        </p>
-                      </div>
-                    </div>
-                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
@@ -1283,6 +1232,7 @@ export function CreateEventDialog({
                 </div>
               </>
             )}
+
             {/* Step 3 — Media & Ticketing */}
             {step === 2 && (
               <div className="space-y-6">
@@ -1384,56 +1334,9 @@ export function CreateEventDialog({
                 >
                   <Plus className="mr-1 h-3 w-3" /> Add Question
                 </Button>
-
-                <p className="font-mono text-xs font-bold text-black/50 uppercase">
-                  Post-event rating dimensions (optional)
-                </p>
-                {form.watch("ratingMetrics")?.map((metric: string, index: number) => (
-                  <div key={index} className="neu-border flex items-center gap-2 bg-white p-3">
-                    <Input
-                      placeholder="e.g. Food Quality"
-                      value={metric}
-                      onChange={(e) => {
-                        const current = form.getValues("ratingMetrics") || [];
-                        const next = [...current];
-                        next[index] = e.target.value;
-                        form.setValue("ratingMetrics", next);
-                      }}
-                      className="font-mono text-sm"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const current = form.getValues("ratingMetrics") || [];
-                        form.setValue(
-                          "ratingMetrics",
-                          current.filter((_, i) => i !== index),
-                        );
-                      }}
-                      className="text-destructive hover:text-destructive/80"
-                      aria-label={`Remove rating dimension ${metric || index + 1}`}
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                ))}
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    const current = form.getValues("ratingMetrics") || [];
-                    form.setValue("ratingMetrics", [...current, ""]);
-                  }}
-                  className="w-full border-dashed font-mono text-xs font-bold"
-                >
-                  <Plus className="mr-1 h-3 w-3" /> Add Rating Dimension
-                </Button>
-                <p className="text-xs text-black/50">
-                  After the event, attendees rate these categories on a 0-100 slider. Leave empty to
-                  use the default dimensions.
-                </p>
               </div>
             )}
+
             {/* Step 4 — Review (confirm) */}
             {step === 3 && (
               <>
@@ -1481,13 +1384,6 @@ export function CreateEventDialog({
                       <p className="font-bold">{form.getValues("faqs").length} question(s)</p>
                     </div>
                   )}
-                  {form.getValues("ratingMetrics") &&
-                    form.getValues("ratingMetrics").length > 0 && (
-                      <div>
-                        <p className="text-xs text-black/40">Rating Dimensions</p>
-                        <p className="font-bold">{form.getValues("ratingMetrics").join(", ")}</p>
-                      </div>
-                    )}
                 </div>
 
                 <FormField
@@ -1511,59 +1407,57 @@ export function CreateEventDialog({
                 />
               </>
             )}
+
             <div className="border-t-2 border-dashed border-black pt-4 mt-4 space-y-4">
               <p className="font-mono text-xs font-bold uppercase text-black">
                 Risk & Attendance Details
               </p>
 
               <div className="grid grid-cols-2 gap-4">
-                <FormItem className="flex flex-row items-center justify-between rounded-lg border-2 border-black p-3 bg-white">
+                <div className="flex flex-row items-center justify-between rounded-lg border-2 border-black p-3 bg-white">
                   <div className="space-y-0.5">
-                    <FormLabel className="text-sm font-bold">Alcohol Present</FormLabel>
+                    <label className="text-sm font-bold">Alcohol Present</label>
                   </div>
-                  <FormControl>
-                    <input
-                      type="checkbox"
-                      className="h-5 w-5 border-2 border-black"
-                      checked={form.watch("alcoholPresent") || false}
-                      onChange={(e) => form.setValue("alcoholPresent", e.target.checked)}
-                    />
-                  </FormControl>
-                </FormItem>
+                  <input
+                    type="checkbox"
+                    className="h-5 w-5 border-2 border-black"
+                    checked={form.watch("alcoholPresent") || false}
+                    onChange={(e) => form.setValue("alcoholPresent", e.target.checked)}
+                  />
+                </div>
 
-                <FormItem className="flex flex-row items-center justify-between rounded-lg border-2 border-black p-3 bg-white">
+                <div className="flex flex-row items-center justify-between rounded-lg border-2 border-black p-3 bg-white">
                   <div className="space-y-0.5">
-                    <FormLabel className="text-sm font-bold">Off-Campus Speaker</FormLabel>
+                    <label className="text-sm font-bold">Off-Campus Speaker</label>
                   </div>
-                  <FormControl>
-                    <input
-                      type="checkbox"
-                      className="h-5 w-5 border-2 border-black"
-                      checked={form.watch("offCampusSpeaker") || false}
-                      onChange={(e) => form.setValue("offCampusSpeaker", e.target.checked)}
-                    />
-                  </FormControl>
-                </FormItem>
+                  <input
+                    type="checkbox"
+                    className="h-5 w-5 border-2 border-black"
+                    checked={form.watch("offCampusSpeaker") || false}
+                    onChange={(e) => form.setValue("offCampusSpeaker", e.target.checked)}
+                  />
+                </div>
               </div>
 
-              <FormItem>
-                <FormLabel>Expected Attendance / Capacity</FormLabel>
-                <FormControl>
-                  <Input
-                    type="number"
-                    placeholder="e.g. 150"
-                    className="border-2 border-black bg-white"
-                    value={form.watch("maxAttendees") || ""}
-                    onChange={(e) =>
-                      form.setValue(
-                        "maxAttendees",
-                        e.target.value ? Number(e.target.value) : undefined,
-                      )
-                    }
-                  />
-                </FormControl>
-              </FormItem>
+              <div>
+                <label className="font-mono text-xs font-bold uppercase text-black block mb-1">
+                  Expected Attendance / Capacity
+                </label>
+                <Input
+                  type="number"
+                  placeholder="e.g. 150"
+                  className="border-2 border-black bg-white"
+                  value={form.watch("maxAttendees") || ""}
+                  onChange={(e) =>
+                    form.setValue(
+                      "maxAttendees",
+                      e.target.value ? Number(e.target.value) : undefined,
+                    )
+                  }
+                />
+              </div>
             </div>
+
             <DialogFooter className="pt-2 flex gap-2">
               {step > 0 && (
                 <Button type="button" variant="outline" onClick={handleBack}>
@@ -1593,6 +1487,17 @@ export function CreateEventDialog({
           </form>
         </Form>
       </DialogContent>
+      {gatingStatus?.pending_events && (
+        <PostMortemGatingModal
+          isOpen={showGatingModal}
+          pendingEvents={gatingStatus.pending_events}
+          onClose={() => setShowGatingModal(false)}
+          onSuccess={() => {
+            setShowGatingModal(false);
+            refetchGating();
+          }}
+        />
+      )}
     </Dialog>
   );
 }
