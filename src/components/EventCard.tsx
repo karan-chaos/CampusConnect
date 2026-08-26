@@ -2,10 +2,9 @@ import {
   formatDate,
   formatEventDateRange,
   getCountdown,
-  getGoogleCalendarUrl,
-  getIcsContent,
   isEventLive,
 } from "@/lib/utils";
+import { AddToCalendarDropdown } from "@/components/events/AddToCalendarDropdown";
 import { Link } from "react-router-dom";
 import { useState } from "react";
 import { MapPin, Calendar, Clock, Link as LinkIcon, Share2, Bookmark, Play } from "lucide-react";
@@ -38,7 +37,7 @@ interface Event {
   created_at?: string | null;
   max_attendees?: number | null;
   clubs: { name: string } | { name: string }[] | null;
-  event_rsvps: { id: string; user_id: string }[] | null;
+  event_rsvps: { id: string; user_id: string; no_media_consent?: boolean | null }[] | null;
   saved_events: { id: string; user_id: string }[] | null;
   rsvp_count?: number;
   saved_count?: number;
@@ -172,16 +171,6 @@ export function EventCard({
   const myRsvp = user ? rsvps.find((rsvp) => rsvp.user_id === user.id) : null;
   const preloadEvent = usePreloadEvent(event.id);
   const hasRsvpd = !!myRsvp;
-  const colors = ["bg-lime", "bg-sky", "bg-peach"];
-  const googleCalendarUrl = getGoogleCalendarUrl({
-    title: event.title,
-    description: event.description,
-    event_date: event.event_date,
-    start_date: event.start_date,
-    end_date: event.end_date,
-    location: event.location,
-  });
-  const countdown = event.event_date ? getCountdown(event.event_date) : "TBA";
   const isLive = isEventLive(event);
 
   const [ticketOpen, setTicketOpen] = useState(false);
@@ -220,31 +209,7 @@ export function EventCard({
     }
   };
 
-  const handleDownloadIcs = () => {
-    const icsContent = getIcsContent({
-      title: event.title,
-      description: event.description,
-      event_date: event.event_date,
-      start_date: event.start_date,
-      end_date: event.end_date,
-      location: event.location,
-    });
-
-    if (!icsContent) {
-      toast.error("Failed to generate calendar file");
-      return;
-    }
-
-    const blob = new Blob([icsContent], { type: "text/calendar;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.setAttribute("download", `${event.title.replace(/[^a-z0-9]/gi, "_").toLowerCase()}.ics`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
+  
 
   const shareUrl =
     typeof window !== "undefined"
@@ -285,9 +250,6 @@ export function EventCard({
     <div className="group">
       <article
         id={`event-${event.id}`}
- feat/club-equipment-asset-register-3481
-        className={`neu-border p-5 relative ${colors[index % colors.length]} transition-all duration-300 ease-out group-hover:scale-[1.02] hover:-translate-y-1 hover:shadow-[6px_6px_0_0_var(--color-ink)]`}
-
         className={`neu-border p-5 relative ${
           active
             ? "bg-blue-100 border-4 border-blue-600 ring-2 ring-blue-600"
@@ -295,7 +257,6 @@ export function EventCard({
         } transition-all duration-300 ease-out group-hover:scale-[1.02] hover:-translate-y-1 hover:shadow-[6px_6px_0_0_var(--color-ink)]`}
         onMouseEnter={preloadEvent.onMouseEnter}
         onMouseLeave={preloadEvent.onMouseLeave}
- main
       >
         <div className="flex items-start justify-between gap-3">
           <div className="flex flex-col">
@@ -311,9 +272,7 @@ export function EventCard({
               event.event_date && (
                 <span
                   className={`mt-2 inline-flex min-h-[24px] items-center rounded-full px-2 py-1 text-[11px] font-bold ${
-                    countdown === "Ended"
-                      ? "bg-gray-100 text-gray-600"
-                      : "bg-peach text-orange-700"
+                    countdown === "Ended" ? "bg-gray-100 text-gray-600" : "bg-peach text-orange-700"
                   }`}
                 >
                   {countdown}
@@ -344,21 +303,13 @@ export function EventCard({
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
- feat/club-equipment-asset-register-3481
                   <ShareMenu
                     url={shareUrl}
                     title={event.title}
                     text={`Check out this event: ${event.title}`}
+                    eventId={event.id}
                   >
                     <button
-
-<ShareMenu
-                    url={shareUrl}
-                    title={event.title}
-                    text={`Check out this event: ${event.title}`}
-                    eventId={event.id}
-                  >                    <button
- main
                       type="button"
                       aria-label="Share event link"
                       className="neu-border neu-press grid h-8 w-8 shrink-0 place-items-center bg-white text-black"
@@ -439,28 +390,19 @@ export function EventCard({
             </Tooltip>
           </TooltipProvider>
 
-          {hasRsvpd && googleCalendarUrl && (
-            <a
-              href={googleCalendarUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="neu-border bg-white px-4 py-2 font-mono text-xs font-bold uppercase tracking-wider transition-all duration-300 hover:scale-105 active:scale-95 flex items-center gap-2"
-            >
-              <Calendar aria-hidden="true" size={14} strokeWidth={3} />
-              Add to Google Calendar
-            </a>
-          )}
-          {hasRsvpd && googleCalendarUrl && (
-            <button
-              onClick={handleDownloadIcs}
-              type="button"
-              className="neu-border bg-white px-4 py-2 font-mono text-xs font-bold uppercase tracking-wider transition-all duration-300 hover:scale-105 active:scale-95 flex items-center gap-2 text-black"
-            >
-              <Calendar aria-hidden="true" size={14} strokeWidth={3} />
-              Add to Apple/Outlook
-            </button>
-          )}
-          {hasRsvpd && myRsvp && (
+          <AddToCalendarDropdown
+              event={{
+                id: event.id,
+                title: event.title,
+                description: event.description,
+                event_date: event.event_date,
+                start_date: event.start_date,
+                end_date: event.end_date,
+                location: event.location,
+                eventUrl: `/events/${event.id}`,
+              }}
+              className=""
+            />
             <Button
               type="button"
               onClick={() => setTicketOpen(true)}
@@ -486,6 +428,7 @@ export function EventCard({
           onOpenChange={setTicketOpen}
           event={event}
           rsvpId={myRsvp?.id ?? ""}
+          noMediaConsent={myRsvp?.no_media_consent === true}
         />
         <EventRsvpCancelDialog
           open={cancelConfirmOpen}
