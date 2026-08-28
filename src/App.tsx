@@ -35,7 +35,8 @@ import { ComplianceCheckGuard } from "@/components/auth/ComplianceCheckGuard";
 import { ShadowbanEvasionCheck } from "@/components/Auth/ShadowbanEvasionCheck";
 import UnsubscribeRoute from "./routes/unsubscribe";
 import PollOverlayRoute from "./routes/overlay.poll.$poll_id";
-import { EmergencyBroadcastOverlay } from "@/components/EmergencyBroadcastOverlay"; import { LoginRecoveryModal } from "@/components/auth/LoginRecoveryModal";
+import { EmergencyBroadcastOverlay } from "@/components/EmergencyBroadcastOverlay";
+import { LoginRecoveryModal } from "@/components/auth/LoginRecoveryModal";
 function RemoteLoadingScreen() {
   return (
     <div className="flex h-screen w-full items-center justify-center bg-slate-950 text-white">
@@ -104,7 +105,8 @@ const ClubArticlesRoute = lazy(() => import("./routes/clubs.$slug.articles"));
 const ClubArticleDetailsRoute = lazy(() => import("./routes/clubs.$slug.articles.$articleId"));
 const ClubVaultRoute = lazy(() => import("./routes/clubs.$slug.vault"));
 const ClubHonorariumsRoute = lazy(() => import("./routes/clubs.$slug.honorariums"));
-const ClubNewsletterRoute = lazy(() => import("./routes/clubs.$slug.newsletter"));const ClubResourcesRoute = lazy(() => import("./routes/clubs.$slug.resources"));
+const ClubNewsletterRoute = lazy(() => import("./routes/clubs.$slug.newsletter"));
+const ClubResourcesRoute = lazy(() => import("./routes/clubs.$slug.resources"));
 const ClubYearbookRoute = lazy(() => import("./routes/clubs.$slug.yearbook"));
 const ScavengerHuntsList = lazy(() => import("./routes/scavenger-hunts"));
 const ScavengerHuntGame = lazy(() => import("./routes/scavenger-hunts.$id"));
@@ -179,6 +181,8 @@ const SkillSwapMarketplace = lazy(() => import("./routes/skill-swap"));
 const CampusWellnessHub = lazy(() => import("./pages/wellness/CampusWellnessHub"));
 const ReferralDashboardRoute = lazy(() => import("./pages/ReferralDashboard"));
 const ReferralLeaderboardRoute = lazy(() => import("./pages/ReferralLeaderboard"));
+const StudyGroupsRoute = lazy(() => import("./routes/study-groups"));
+const StudyGroupsAnalyticsRoute = lazy(() => import("./routes/study-groups.analytics"));
 const AudioTourRoute = lazy(() => import("./routes/audio-tour"));
 const DynamicEarlyBirdAnalyticsRoute = lazy(
   () => import("./routes/events.$id.early-bird-analytics"),
@@ -343,8 +347,8 @@ function AnimatedOutlet() {
 //                 <Route path="/admin/emergency-broadcast" element={<AdminEmergencyBroadcast />} />
 //                 <Route path="/admin/badges" element={<AdminBadgesPage />} />
 //                 <Route path="/unsubscribe" element={<UnsubscribeRoute />} />
-                  <Route path="/achievements" element={<AchievementsPage />} />
-                  <Route path="/events/:eventId/reviews" element={<EventFeedbackPage />} />
+//                 <Route path="/achievements" element={<AchievementsPage />} />
+//                 <Route path="/events/:eventId/reviews" element={<EventFeedbackPage />} />
 //                 <Route path="*" element={<NotFound />} />
 //               </Route>
 //             </Route>
@@ -429,7 +433,6 @@ const router = createBrowserRouter(
               <Route path="discovery" element={<ClubDiscovery />} />
               <Route path="audio-pitches" element={<ClubAudioPitches />} />
               <Route path="new" element={<ClubNew />} />
-
               <Route path=":slug" element={<ClubDetails />} />
               <Route path=":slug/manage" element={<ClubManageRoute />} />
               <Route path=":slug/series-analytics" element={<ClubSeriesAnalyticsRoute />} />
@@ -438,7 +441,8 @@ const router = createBrowserRouter(
               <Route path=":slug/articles/:articleId" element={<ClubArticleDetailsRoute />} />
               <Route path=":slug/vault" element={<ClubVaultRoute />} />
               <Route path=":slug/honorariums" element={<ClubHonorariumsRoute />} />
-              <Route path=":slug/newsletter" element={<ClubNewsletterRoute />} />              <Route path=":slug/resources" element={<ClubResourcesRoute />} />
+              <Route path=":slug/newsletter" element={<ClubNewsletterRoute />} />{" "}
+              <Route path=":slug/resources" element={<ClubResourcesRoute />} />
               <Route path=":slug/yearbook/2026" element={<ClubYearbookRoute />} />
               <Route path=":slug/revive" element={<ReviveClubPage />} />
             </Route>
@@ -573,6 +577,10 @@ const router = createBrowserRouter(
 
             {/* Messages */}
             <Route path="/messages" element={<MessagesRoute />} />
+
+            {/* Study Groups */}
+            <Route path="/study-groups" element={<StudyGroupsRoute />} />
+            <Route path="/study-groups/analytics" element={<StudyGroupsAnalyticsRoute />} />
 
             {/* Unsubscribe */}
             <Route path="/unsubscribe" element={<UnsubscribeRoute />} />
