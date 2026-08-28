@@ -183,6 +183,7 @@ const ReferralDashboardRoute = lazy(() => import("./pages/ReferralDashboard"));
 const ReferralLeaderboardRoute = lazy(() => import("./pages/ReferralLeaderboard"));
 const StudyGroupsRoute = lazy(() => import("./routes/study-groups"));
 const StudyGroupsAnalyticsRoute = lazy(() => import("./routes/study-groups.analytics"));
+const ExamTrackerRoute = lazy(() => import("./routes/exam-tracker"));
 const AudioTourRoute = lazy(() => import("./routes/audio-tour"));
 const DynamicEarlyBirdAnalyticsRoute = lazy(
   () => import("./routes/events.$id.early-bird-analytics"),
@@ -581,6 +582,7 @@ const router = createBrowserRouter(
             {/* Study Groups */}
             <Route path="/study-groups" element={<StudyGroupsRoute />} />
             <Route path="/study-groups/analytics" element={<StudyGroupsAnalyticsRoute />} />
+            <Route path="/exam-tracker" element={<ExamTrackerRoute />} />
 
             {/* Unsubscribe */}
             <Route path="/unsubscribe" element={<UnsubscribeRoute />} />
