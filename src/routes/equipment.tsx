@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { SiteShell } from "@/components/site/SiteShell";
 import { useQuery, useMutation } from "@/hooks/useReactQueryReplacement";
@@ -31,8 +31,9 @@ export default function EquipmentMarketplace() {
   const [selectedItem, setSelectedItem] = useState<any>(null);
   const [rentDays, setRentDays] = useState(2);
   const [myClubId, setMyClubId] = useState<string>("");
+  const [isCheckingAirspace, setIsCheckingAirspace] = useState(false);
+  const [airspaceError, setAirspaceError] = useState<string | null>(null);
 
-  // Fetch user profile and their club roles
   const { data: userProfile } = useQuery({
     queryKey: ["user-profile-for-rentals"],
     queryFn: async () => {
@@ -56,6 +57,57 @@ export default function EquipmentMarketplace() {
       return user;
     },
   });
+
+  const checkAirspace = async (item: any) => {
+    if (!item) return;
+    const isDrone =
+      item.category?.toLowerCase() === "drone" ||
+      item.category?.toLowerCase() === "drones" ||
+      item.name?.toLowerCase().includes("drone");
+
+    if (!isDrone) {
+      setAirspaceError(null);
+      return;
+    }
+
+    setIsCheckingAirspace(true);
+    setAirspaceError(null);
+
+    const campusLat = 41.703;
+    const campusLng = -86.239;
+    const startDate = new Date();
+    const dateStr = startDate.toISOString().split("T")[0];
+
+    try {
+      const url = `https://api.faa.gov/uas/b4ufly/v1/airspace?latitude=${campusLat}&longitude=${campusLng}&date=${dateStr}`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error("FAA API connection failed");
+      }
+      const data = await response.json();
+      if (data.restricted) {
+        setAirspaceError(
+          data.reason ||
+            "Airspace Restricted: A Temporary Flight Restriction is active on this date. Drones cannot be flown. Booking denied for legal compliance.",
+        );
+      } else {
+        setAirspaceError(null);
+      }
+    } catch (err: any) {
+      console.error("Failed to check airspace via FAA/B4UFLY API:", err);
+    } finally {
+      setIsCheckingAirspace(false);
+    }
+  };
+
+  // Trigger check when selection changes
+  useEffect(() => {
+    if (selectedItem) {
+      checkAirspace(selectedItem);
+    } else {
+      setAirspaceError(null);
+    }
+  }, [selectedItem, rentDays]);
 
   // Fetch gear catalog (is_rentable = true)
   const {
@@ -430,6 +482,16 @@ export default function EquipmentMarketplace() {
 
           {selectedItem && (
             <div className="space-y-4 font-mono text-sm my-4 border-2 border-black p-4 bg-white shadow-[2px_2px_0_0_#000]">
+              {isCheckingAirspace && (
+                <div className="bg-blue-50 text-blue-800 border border-blue-200 p-2 text-xs font-bold font-mono">
+                  Checking FAA/B4UFLY airspace status...
+                </div>
+              )}
+              {airspaceError && (
+                <div className="bg-red-50 text-red-800 border border-red-200 p-3 text-xs font-bold font-mono whitespace-pre-wrap">
+                  {airspaceError}
+                </div>
+              )}
               <div className="flex justify-between">
                 <span>Daily Rental Rate:</span>
                 <span className="font-bold">
@@ -478,7 +540,7 @@ export default function EquipmentMarketplace() {
             </Button>
             <Button
               onClick={() => requestRentMutation.mutate()}
-              disabled={requestRentMutation.isPending}
+              disabled={requestRentMutation.isPending || isCheckingAirspace || !!airspaceError}
               className="neu-border bg-[#a3e635] text-black hover:bg-lime-400 font-bold uppercase rounded-none shadow-[2px_2px_0_0_#000]"
             >
               Authorize & Rent
