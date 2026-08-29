@@ -3,31 +3,24 @@ export type Json = string | number | boolean | null | { [key: string]: Json | un
 export type Database = {
   public: {
     Tables: {
-      club_documents: {
-        Row: {
-          id: string;
-          club_id: string;
-          file_url: string;
-          version_number: number;
-          uploaded_by: string;
-          created_at: string;
-        };
-        Insert: {
-          id?: string;
-          club_id: string;
-          file_url: string;
-          version_number: number;
-          uploaded_by: string;
-          created_at?: string;
-        };
-        Update: {
-          id?: string;
-          club_id?: string;
-          file_url?: string;
-          version_number?: number;
-          uploaded_by?: string;
-          created_at?: string;
-        };
+
+      event_wifi_access_points: {
+        Row: any;
+        Insert: any;
+        Update: any;
+        Relationships: any;
+      };
+      event_wifi_density_snapshots: {
+        Row: any;
+        Insert: any;
+        Update: any;
+        Relationships: any;
+      };
+      peer_listener_verifications: {
+        Row: any;
+        Insert: any;
+        Update: any;
+        Relationships: any;
       };
       club_transactions: {
         Row: {
@@ -388,6 +381,7 @@ export type Database = {
           widgets_config: Json | null;
           created_at: string;
           updated_at: string;
+          insurance_policy_id: string | null;
         };
         Insert: {
           id?: string;
@@ -420,6 +414,7 @@ export type Database = {
           widgets_config?: Json | null;
           created_at?: string;
           updated_at?: string;
+          insurance_policy_id?: string | null;
         };
         Update: {
           id?: string;
@@ -452,6 +447,7 @@ export type Database = {
           widgets_config?: Json | null;
           created_at?: string;
           updated_at?: string;
+          insurance_policy_id?: string | null;
         };
         Relationships: [];
       };
@@ -687,7 +683,6 @@ export type Database = {
           skills: string[] | null;
           course_codes: string[];
           dietary_restrictions?: string[] | null;
-          dietary_restrictions: string[] | null;
           notification_preferences: Json | null;
           is_banned: boolean;
           strike_count: number;
@@ -872,6 +867,93 @@ export type Database = {
           reviewer_user_id?: string;
           rating?: number;
           comment?: string | null;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
+      vendor_w9_forms: {
+        Row: {
+          id: string;
+          vendor_id: string;
+          legal_name: string;
+          business_name: string | null;
+          tin_type: "ssn" | "ein";
+          tin: string;
+          address_line1: string;
+          city: string;
+          state: string;
+          zip: string;
+          signed_at: string;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          vendor_id: string;
+          legal_name: string;
+          business_name?: string | null;
+          tin_type: "ssn" | "ein";
+          tin: string;
+          address_line1: string;
+          city: string;
+          state: string;
+          zip: string;
+          signed_at?: string;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          vendor_id?: string;
+          legal_name?: string;
+          business_name?: string | null;
+          tin_type?: "ssn" | "ein";
+          tin?: string;
+          address_line1?: string;
+          city?: string;
+          state?: string;
+          zip?: string;
+          signed_at?: string;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      vendor_1099_misc_filings: {
+        Row: {
+          id: string;
+          tax_year: number;
+          club_id: string;
+          vendor_id: string;
+          total_paid: number;
+          schema: Json;
+          pdf_url: string | null;
+          treasurer_notified_at: string | null;
+          vendor_notified_at: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          tax_year: number;
+          club_id: string;
+          vendor_id: string;
+          total_paid: number;
+          schema?: Json;
+          pdf_url?: string | null;
+          treasurer_notified_at?: string | null;
+          vendor_notified_at?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          tax_year?: number;
+          club_id?: string;
+          vendor_id?: string;
+          total_paid?: number;
+          schema?: Json;
+          pdf_url?: string | null;
+          treasurer_notified_at?: string | null;
+          vendor_notified_at?: string | null;
           created_at?: string;
         };
         Relationships: [];
@@ -1443,6 +1525,7 @@ export type Database = {
           location_lat: number | null;
           location_lon: number | null;
           has_photography: boolean;
+          score_data: Json | null;
           is_high_demand: boolean;
 
           location: any;
@@ -1505,6 +1588,7 @@ export type Database = {
           location_lat?: number | null;
           location_lon?: number | null;
           has_photography?: boolean;
+          score_data?: Json | null;
           is_high_demand?: boolean;
 
           location?: any;
@@ -1566,6 +1650,7 @@ export type Database = {
           location_lat?: number | null;
           location_lon?: number | null;
           has_photography?: boolean;
+          score_data?: Json | null;
           is_high_demand?: boolean;
 
           location?: any;
@@ -1736,7 +1821,7 @@ export type Database = {
           accommodations_requested: string | null;
           no_media_consent: boolean;
           dietary_restrictions?: string[] | null;
-          dietary_restrictions: string[] | null;
+
         };
         Insert: {
           id?: string;
@@ -2024,6 +2109,42 @@ export type Database = {
           last_heartbeat_at?: string | null;
           fallback_activated_at?: string | null;
           recovered_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      event_hardware_encoders: {
+        Row: {
+          id: string;
+          event_id: string;
+          encoder_type: "blackmagic_web_presenter" | "aws_medialive";
+          rest_base_url: string;
+          rtmp_url: string | null;
+          channel_id: string | null;
+          is_active: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          event_id: string;
+          encoder_type: "blackmagic_web_presenter" | "aws_medialive";
+          rest_base_url: string;
+          rtmp_url?: string | null;
+          channel_id?: string | null;
+          is_active?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          event_id?: string;
+          encoder_type?: "blackmagic_web_presenter" | "aws_medialive";
+          rest_base_url?: string;
+          rtmp_url?: string | null;
+          channel_id?: string | null;
+          is_active?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -3511,7 +3632,8 @@ export type Database = {
             | "entrance"
             | "elevator"
             | "ramp"
-            | "restroom";
+            | "restroom"
+            | "Quiet_Space";
           x_coord: number;
           y_coord: number;
           width: number;
@@ -3534,7 +3656,8 @@ export type Database = {
             | "entrance"
             | "elevator"
             | "ramp"
-            | "restroom";
+            | "restroom"
+            | "Quiet_Space";
           x_coord: number;
           y_coord: number;
           width: number;
@@ -3557,7 +3680,8 @@ export type Database = {
             | "entrance"
             | "elevator"
             | "ramp"
-            | "restroom";
+            | "restroom"
+            | "Quiet_Space";
           x_coord?: number;
           y_coord?: number;
           width?: number;
@@ -4612,6 +4736,45 @@ export type Database = {
         };
         Relationships: [];
       };
+      inactive_account_purge_audit: {
+        Row: {
+          id: string;
+          user_id: string;
+          last_sign_in_at: string | null;
+          account_created_at: string;
+          cutoff_at: string;
+          role_at_purge: string;
+          dry_run: boolean;
+          status: "identified" | "anonymized" | "failed";
+          result: Json;
+          purged_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          last_sign_in_at?: string | null;
+          account_created_at: string;
+          cutoff_at: string;
+          role_at_purge: string;
+          dry_run?: boolean;
+          status: "identified" | "anonymized" | "failed";
+          result?: Json;
+          purged_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          last_sign_in_at?: string | null;
+          account_created_at?: string;
+          cutoff_at?: string;
+          role_at_purge?: string;
+          dry_run?: boolean;
+          status?: "identified" | "anonymized" | "failed";
+          result?: Json;
+          purged_at?: string;
+        };
+        Relationships: [];
+      };
     };
     Functions: {
       set_club_role_manager: {
@@ -4728,6 +4891,17 @@ export type Database = {
       is_event_organizer: {
         Args: { p_event_id: string; p_user_id?: string };
         Returns: boolean;
+      };
+      upsert_event_hardware_encoder: {
+        Args: {
+          p_event_id: string;
+          p_encoder_type: string;
+          p_rest_base_url: string;
+          p_rtmp_url?: string | null;
+          p_channel_id?: string | null;
+          p_is_active?: boolean;
+        };
+        Returns: Database["public"]["Tables"]["event_hardware_encoders"]["Row"];
       };
       upsert_event_wifi_access_point: {
         Args: {
@@ -4870,6 +5044,35 @@ export type Database = {
           p_notes?: string | null;
         };
         Returns: Database["public"]["Tables"]["rfp_bids"]["Row"];
+      };
+      vendor_fiscal_year_escrow_total: {
+        Args: { p_vendor_id: string; p_tax_year?: number };
+        Returns: number;
+      };
+      vendor_requires_w9_to_bid: {
+        Args: { p_tax_year?: number };
+        Returns: boolean;
+      };
+      submit_vendor_w9: {
+        Args: {
+          p_legal_name: string;
+          p_tin_type: string;
+          p_tin: string;
+          p_address_line1: string;
+          p_city: string;
+          p_state: string;
+          p_zip: string;
+          p_business_name?: string | null;
+        };
+        Returns: Database["public"]["Tables"]["vendor_w9_forms"]["Row"];
+      };
+      prepare_vendor_1099_misc_filings: {
+        Args: { p_tax_year?: number; p_club_id?: string | null };
+        Returns: number;
+      };
+      is_club_treasurer: {
+        Args: { p_club_id: string; p_user_id: string };
+        Returns: boolean;
       };
       save_vendor_portfolio: {
         Args: { p_portfolio: Json };
