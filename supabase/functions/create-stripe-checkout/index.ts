@@ -1,6 +1,9 @@
 // =============================================================================
 // Edge Function: Create Stripe Checkout Session (with Group Discounts)
 // Issue: #2902 - Implement 'Group Discounts' for Event Ticketing
+// Description: Creates a Stripe Checkout session.Validates the requested
+// quantity against remaining capacity, calculates the group discount, and
+// applies it as a negative line item(discount) in the Stripe session.
 // Description: Creates a Stripe Checkout session. Validates the requested
 // quantity against remaining capacity, calculates the group discount, and
 // applies it as a negative line item (discount) in the Stripe session.
@@ -9,6 +12,14 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Stripe from "https://esm.sh/stripe@13.0.0?target=deno";
+import { Redis } from "https://esm.sh/@upstash/redis@1.30.0";
+import {
+  AFFILIATE_SOURCE_METADATA_KEY,
+  buildAffiliateSourceMetadata,
+  calculateMultiCampusRevenueSplit,
+  formatAffiliateConnectCharge,
+  shouldApplyAffiliateSplit,
+} from "../_shared/multiCampusRevenueSplit.ts";
 
 const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY")!, {
   apiVersion: "2023-10-16",
@@ -24,10 +35,105 @@ interface DiscountRule {
   discount_pct: number;
 }
 
+type AdminClient = ReturnType<typeof createClient>;
+
+async function resolveBuyerCampusInstanceId(
+  admin: AdminClient,
+  userId: string,
+): Promise<string> {
+  const { data: profile } = await admin
+    .from("profiles")
+    .select("college, campus_instance_id")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (profile?.campus_instance_id) return profile.campus_instance_id;
+
+  const college = (profile?.college || "").trim();
+  if (!college) return "";
+
+  const { data: campus } = await admin
+    .from("campus_instances")
+    .select("id")
+    .ilike("institution_name", college)
+    .limit(1)
+    .maybeSingle();
+
+  return campus?.id || "";
+}
+
+async function resolveAffiliateCheckout(opts: {
+  admin: AdminClient;
+  userId: string;
+  event: { club_id?: string | null; clubs?: unknown };
+  grossCents: number;
+}) {
+  const clubRow = opts.event.clubs;
+  const club = (Array.isArray(clubRow) ? clubRow[0] : clubRow) as {
+    id?: string;
+    campus_instance_id?: string | null;
+    stripe_account_id?: string | null;
+  } | null;
+
+  const buyerInstanceId = await resolveBuyerCampusInstanceId(opts.admin, opts.userId);
+  const hostInstanceId =
+    (club?.campus_instance_id || "").trim() ||
+    (Deno.env.get("CAMPUS_INSTANCE_ID") || "").trim();
+
+  if (!shouldApplyAffiliateSplit(buyerInstanceId, hostInstanceId)) {
+    return null;
+  }
+
+  const split = calculateMultiCampusRevenueSplit(opts.grossCents);
+  let affiliateStripeAccount = "";
+  const { data: affiliateCampus } = await opts.admin
+    .from("campus_instances")
+    .select("student_union_stripe_account_id")
+    .eq("id", buyerInstanceId)
+    .maybeSingle();
+  affiliateStripeAccount = affiliateCampus?.student_union_stripe_account_id || "";
+
+  const hostStripeAccountId = club?.stripe_account_id || "";
+  const connect = hostStripeAccountId
+    ? formatAffiliateConnectCharge(split, hostStripeAccountId)
+    : null;
+
+  return {
+    buyerInstanceId,
+    hostInstanceId,
+    hostClubId: club?.id || opts.event.club_id || "",
+    affiliateStripeAccount,
+    split,
+    connect,
+    affiliateSourceMetadata: buildAffiliateSourceMetadata(buyerInstanceId),
+  };
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
+
+  try {
+    // 1. Authenticate User
+    const authHeader = req.headers.get("Authorization")!;
+    const supabase = createClient(
+      Deno.env.get("SUPABASE_URL") ?? "",
+      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+      { global: { headers: { Authorization: authHeader } } },
+    );
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) throw new Error("Unauthorized");
+
+    // 2. Parse Request
+    const { eventId, quantity } = await req.json();
+    if (!eventId || !quantity || quantity < 1) {
+      throw new Error("Invalid event ID or quantity");
+    }
+
 
   try {
     // 1. Authenticate User
@@ -98,7 +204,7 @@ serve(async (req) => {
 
     const { data: event, error: eventError } = await supabase
       .from("events")
-      .select("title")
+      .select("title, surge_config")
       .eq("id", eventId)
       .single();
 
@@ -106,6 +212,114 @@ serve(async (req) => {
       throw new Error("Event not found");
     }
 
+    const remainingCapacity = tier.capacity !== null ? tier.capacity - tier.sold_count : Infinity;
+
+    if (quantity > remainingCapacity) {
+      throw new Error(`Only ${remainingCapacity} tickets remaining for the current tier.`);
+    }
+
+    // --- SURGE PRICING LOGIC ---
+    let basePriceCents = tier.price;
+    let isSurgeActive = false;
+    const surgeConfig = event.surge_config || { enabled: false, threshold: 10, multiplier: 1.2 };
+
+    if (surgeConfig.enabled) {
+      const redisUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
+      const redisToken = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
+      if (redisUrl && redisToken) {
+        try {
+          const redis = new Redis({ url: redisUrl, token: redisToken });
+          const now = Date.now();
+          const oneMinuteAgo = now - 60000;
+          const key = `sales_velocity:${eventId}`;
+
+          // Clean up old entries
+          await redis.zremrangebyscore(key, 0, oneMinuteAgo);
+          // Get current count in the sliding window
+          const salesVelocity = await redis.zcard(key);
+
+          if (salesVelocity >= surgeConfig.threshold) {
+            isSurgeActive = true;
+            basePriceCents = Math.round(basePriceCents * surgeConfig.multiplier);
+            console.log(
+              `[Surge Pricing] Active for ${eventId}. Velocity: ${salesVelocity}. New price: ${basePriceCents}`,
+            );
+          }
+        } catch (redisErr) {
+          console.error("[Surge Pricing] Redis error (falling back to standard price):", redisErr);
+        }
+      }
+    }
+    // -----------------------------
+
+    // 4. Calculate Discount
+    const rules: DiscountRule[] = tier.discount_rules || [];
+    const sortedRules = [...rules].sort((a, b) => b.min_qty - a.min_qty);
+
+    let applicableDiscount = 0;
+    for (const rule of sortedRules) {
+      if (quantity >= rule.min_qty) {
+        applicableDiscount = rule.discount_pct;
+        break;
+      }
+    }
+
+    const subtotal = basePriceCents * quantity;
+    const discountAmount = Math.round(subtotal * (applicableDiscount / 100));
+    const totalAmount = subtotal - discountAmount;
+
+    // 5. Build Stripe Line Items
+    const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [
+      {
+        price_data: {
+          currency: "usd",
+          product_data: {
+            name: `${event.title} - ${tier.name}${isSurgeActive ? " (High Demand Pricing)" : ""}`,
+            description: `${quantity} ticket(s)`,
+          },
+          unit_amount: basePriceCents,
+        },
+        quantity: quantity,
+      },
+    ];
+
+    // Apply discount as a negative line item if applicable
+    if (discountAmount > 0) {
+
+    if (tierError || !activeTiers || activeTiers.length === 0) {
+      throw new Error("No ticket tier is currently available");
+    }
+
+    const tier = activeTiers[0];
+
+    const { data: event, error: eventError } = await supabase
+      .from("events")
+      .select(
+        "title, club_id, requires_signature, clubs ( id, campus_instance_id, stripe_account_id )",
+      )
+      .eq("id", eventId)
+      .single();
+
+    if (eventError || !event) {
+      throw new Error("Event not found");
+    }
+
+    // Issue #4837: Block checkout until the NDA is signed for gated events.
+    if ((event as any).requires_signature) {
+      const { data: signature } = await adminSupabase
+        .from("event_nda_signatures")
+        .select("status")
+        .eq("event_id", eventId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (signature?.status !== "completed") {
+        return new Response(
+          JSON.stringify({ error: "You must sign the event NDA before checking out." }),
+          { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+    }
     const remainingCapacity = tier.capacity !== null ? tier.capacity - tier.sold_count : Infinity;
 
     if (totalQuantity > remainingCapacity) {
@@ -364,6 +578,15 @@ serve(async (req) => {
         price_data: {
           currency: "usd",
           product_data: {
+            name: `Group Discount (${applicableDiscount}% off)`,
+          },
+          unit_amount: -discountAmount, // Negative amount for discount
+        },
+        quantity: 1,
+      });
+    }
+
+    // 6. Create Stripe Checkout Session
             name: "CampusConnect Platform Credit",
           },
           unit_amount: -creditToApply,
@@ -403,6 +626,28 @@ serve(async (req) => {
     }
 
     // 7. Create Stripe Checkout Session for remaining balance
+    const affiliate = remainingToChargeCents > 0
+      ? await resolveAffiliateCheckout({
+          admin: adminSupabase,
+          userId: user.id,
+          event,
+          grossCents: remainingToChargeCents,
+        })
+      : null;
+
+    const paymentIntentData: Record<string, unknown> = {
+      setup_future_usage: "off_session",
+    };
+    if (affiliate) {
+      paymentIntentData.metadata = affiliate.affiliateSourceMetadata;
+      if (affiliate.connect) {
+        paymentIntentData.application_fee_amount = affiliate.connect.applicationFeeAmountCents;
+        paymentIntentData.transfer_data = {
+          destination: affiliate.connect.destinationAccountId,
+        };
+      }
+    }
+
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       line_items: lineItems,
@@ -412,6 +657,21 @@ serve(async (req) => {
       metadata: {
         user_id: user.id,
         tier_id: tier.id,
+        quantity: quantity.toString(),
+        discount_applied: applicableDiscount.toString(),
+        event_id: eventId,
+        surge_active: isSurgeActive ? "true" : "false",
+      },
+      // Enforce "All or Nothing" refund policy for group purchases
+      payment_intent_data: {
+        setup_future_usage: "off_session",
+      },
+    });
+
+    return new Response(JSON.stringify({ sessionId: session.id, url: session.url }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      status: 200,
+    });
         quantity: totalQuantity.toString(),
         discount_applied: applicableDiscount.toString(),
         credit_applied_cents: creditToApply.toString(),
@@ -421,11 +681,21 @@ serve(async (req) => {
         group_checkout: (friendUserIds.length > 0).toString(),
         friend_user_ids: friendUserIds.join(","),
         friend_emails: (friendEmails || []).join(","),
+        ...(affiliate
+          ? {
+              [AFFILIATE_SOURCE_METADATA_KEY]: affiliate.buyerInstanceId,
+              host_instance_id: affiliate.hostInstanceId,
+              host_club_id: affiliate.hostClubId,
+              affiliate_stripe_account: affiliate.affiliateStripeAccount,
+              gross_cents: affiliate.split.grossCents.toString(),
+              host_club_cents: affiliate.split.hostClubCents.toString(),
+              affiliate_cents: affiliate.split.affiliateCents.toString(),
+              platform_fee_cents: affiliate.split.platformFeeCents.toString(),
+            }
+          : {}),
       },
       // Enforce "All or Nothing" refund policy for group purchases
-      payment_intent_data: {
-        setup_future_usage: "off_session",
-      },
+      payment_intent_data: paymentIntentData,
     });
 
     return new Response(

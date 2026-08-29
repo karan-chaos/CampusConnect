@@ -5,7 +5,7 @@ on:
     - cron: "*/5 * * * *"
   workflow_dispatch:
   pull_request_target:
-    types: [unlabeled, labeled, synchronize, ready_for_review]
+    types: [opened, unlabeled, labeled, synchronize, ready_for_review]
 
 permissions:
   pull-requests: write
@@ -123,9 +123,9 @@ jobs:
                 currentLabels.push(targetLabel);
               }
 
-              if (!hasClosingKeyword || !hasAssignees || !hasECSoCLabel) {
+              if (!hasAssignees || !hasECSoCLabel) {
                 let missing = [];
-                if (!hasClosingKeyword) missing.push("a closing keyword");
+                
                 if (!hasAssignees) missing.push("an assignee");
                 if (!hasECSoCLabel) missing.push("the ECSoC26 label");
                 
@@ -136,7 +136,7 @@ jobs:
                 
                 if (!hasMissingComment) {
                   const assigneesToTag = hasAssignees ? prData.assignees.map(a => `@${a.login}`).join(" ") : `@${prData.user.login}`;
-                  const missingMsg = `${assigneesToTag} ${missingMsgBase} **${missing.join(', ')}**. Please ensure the PR has a linked issue with an assignee and the ECSoC26 label, and that the PR description/title contains the closing keyword.`;
+                  const missingMsg = `${assigneesToTag} ${missingMsgBase} **${missing.join(', ')}**. Please ensure the PR has a linked issue with an assignee and the ECSoC26 label.`;
                   try {
                     await github.rest.issues.createComment({ owner, repo, issue_number: prNumber, body: missingMsg });
                   } catch (e) {

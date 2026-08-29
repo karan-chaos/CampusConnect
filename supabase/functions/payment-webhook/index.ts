@@ -2,6 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import Stripe from "https://esm.sh/stripe@14.16.0?target=deno";
 import { rateLimiter } from "../shared/rateLimiter.ts";
 import { signTicket } from "../_shared/ticket-crypto.ts";
+import { AFFILIATE_SOURCE_METADATA_KEY } from "../_shared/multiCampusRevenueSplit.ts";
 import { encode } from "https://deno.land/std@0.177.0/encoding/base64.ts";
 import React from "npm:react@18";
 import { Document, Page, Text, View, StyleSheet, renderToBuffer } from "npm:@react-pdf/renderer@3";
@@ -479,6 +480,145 @@ Deno.serve(async (req) => {
         return new Response("Missing rsvp_id or tier_id metadata parameter", { status: 400 });
       }
 
+      // 5c. Dynamic Club Revenue Profit-Sharing (Issue #4415)
+      let ticketEventId = session.metadata?.event_id;
+      if (!ticketEventId && rsvpId) {
+        const { data: rsvpEvt } = await supabase
+          .from("event_rsvps")
+          .select("event_id")
+          .eq("id", rsvpId)
+          .single();
+        ticketEventId = rsvpEvt?.event_id;
+      }
+
+      if (ticketEventId) {
+        try {
+          const { data: coSponsors } = await supabase
+            .from("co_sponsors")
+            .select("club_id, revenue_split")
+            .eq("event_id", ticketEventId)
+            .eq("status", "approved")
+            .not("revenue_split", "is", null);
+
+          if (coSponsors && coSponsors.length > 0) {
+            const splitConfig = coSponsors[0].revenue_split;
+
+            if (splitConfig && Object.keys(splitConfig).length > 0) {
+              console.log(
+                `[Webhook Ingestion] Processing Revenue Split for event ${ticketEventId}`,
+              );
+
+              let netAmountCents = session.amount_total ?? 0;
+              if (session.payment_intent) {
+                try {
+                  const paymentIntent = await stripe.paymentIntents.retrieve(
+                    session.payment_intent as string,
+                    {
+                      expand: ["latest_charge.balance_transaction"],
+                    },
+                  );
+                  const charge = paymentIntent.latest_charge as any;
+                  if (charge && charge.balance_transaction) {
+                    netAmountCents = charge.balance_transaction.net;
+                  }
+                } catch (e) {
+                  console.error("Failed to retrieve balance_transaction:", e);
+                }
+              }
+
+              const transfers = [];
+              for (const [clubId, percentage] of Object.entries(splitConfig)) {
+                if (typeof percentage === "number" && percentage > 0) {
+                  transfers.push({
+                    club_id: clubId,
+                    amount_cents: Math.floor(netAmountCents * (percentage / 100)),
+                    pct: percentage,
+                    stripe_account_id: null,
+                    transfer_id: `sys_split_${Date.now()}_${clubId}`,
+                  });
+                }
+              }
+
+              if (transfers.length > 0) {
+                const { error: splitError } = await supabase.rpc("process_cohost_revenue_split", {
+                  p_event_id: ticketEventId,
+                  p_charge_id:
+                    typeof session.payment_intent === "string"
+                      ? session.payment_intent
+                      : session.id,
+                  p_total_amount_cents: netAmountCents,
+                  p_transfers: transfers,
+                });
+
+                if (splitError) {
+                  console.error(`[DB Error] Failed to process revenue split:`, splitError);
+                } else {
+                  console.log(`[Webhook Ingestion] Successfully executed revenue split.`);
+                }
+              }
+            }
+          }
+        } catch (splitErr) {
+          console.error(`[Webhook Ingestion] Error processing revenue split:`, splitErr);
+        }
+      }
+
+      // 5d. Multi-campus affiliate revenue split (Issue #4726)
+      const affiliateSource = session.metadata?.[AFFILIATE_SOURCE_METADATA_KEY];
+      const affiliateCents = Number.parseInt(session.metadata?.affiliate_cents || "0", 10);
+      if (affiliateSource && affiliateCents > 0) {
+        try {
+          const paymentIntentId =
+            typeof session.payment_intent === "string"
+              ? session.payment_intent
+              : session.payment_intent?.id || session.id;
+          const affiliateAccount = session.metadata?.affiliate_stripe_account || "";
+          let affiliateTransferId: string | null = null;
+
+          if (affiliateAccount) {
+            try {
+              const transfer = await stripe.transfers.create(
+                {
+                  amount: affiliateCents,
+                  currency: session.currency || "usd",
+                  destination: affiliateAccount,
+                  metadata: {
+                    [AFFILIATE_SOURCE_METADATA_KEY]: affiliateSource,
+                    event_id: session.metadata?.event_id || "",
+                    host_instance_id: session.metadata?.host_instance_id || "",
+                  },
+                },
+                { idempotencyKey: `mc-aff-${paymentIntentId}` },
+              );
+              affiliateTransferId = transfer.id;
+            } catch (transferErr) {
+              console.error("[Webhook Ingestion] Affiliate Stripe Transfer failed:", transferErr);
+            }
+          }
+
+          const { error: affiliateLedgerError } = await supabase
+            .from("multi_campus_revenue_splits")
+            .insert({
+              payment_intent_id: paymentIntentId,
+              event_id: session.metadata?.event_id || ticketEventId || null,
+              host_instance_id: session.metadata?.host_instance_id || "",
+              affiliate_instance_id: affiliateSource,
+              host_club_id: session.metadata?.host_club_id || null,
+              gross_cents: Number.parseInt(session.metadata?.gross_cents || "0", 10),
+              host_club_cents: Number.parseInt(session.metadata?.host_club_cents || "0", 10),
+              affiliate_cents: affiliateCents,
+              platform_fee_cents: Number.parseInt(session.metadata?.platform_fee_cents || "0", 10),
+              affiliate_transfer_id: affiliateTransferId,
+            });
+
+          if (affiliateLedgerError && affiliateLedgerError.code !== "23505") {
+            console.error("[Webhook Ingestion] Failed to record multi-campus split:", affiliateLedgerError);
+          }
+        } catch (affiliateErr) {
+          console.error("[Webhook Ingestion] Error processing multi-campus affiliate split:", affiliateErr);
+        }
+      }
+
       // 6. Handle Micro-Donation splitting (Issue #2876)
       if (
         session.metadata?.include_charity_donation === "true" ||
@@ -525,9 +665,207 @@ Deno.serve(async (req) => {
           );
         }
       }
+
+      // ======================================================================
+      // 7. Dynamic "Club Revenue" Profit-Sharing (Issue #4415)
+      // ======================================================================
+      // This module automatically splits ticket revenue between co-hosting
+      // clubs immediately at the point of sale, bypassing manual accounting.
+      //
+      // Algorithm:
+      // 1. Identify if the purchased event has a valid Co-Sponsorship contract
+      //    defined via a signed `revenue_splits` JSON array.
+      // 2. Calculate the exact Stripe Processing Fee (approx 2.9% + $0.30).
+      // 3. Subtract the fee from the gross revenue to determine the Net Profit.
+      // 4. Distribute the Net Profit proportionally based on the agreed percentages.
+      // 5. Handle any fractional cent remainders (e.g., $10 split 3 ways) by
+      //    allocating the remainder to the primary host.
+      // 6. Execute atomic ledger CREDIT transactions via the RPC function.
+      // 7. Generate an immutable Split Receipt for the club Treasurers.
+      // ======================================================================
+
+      if (session.metadata?.event_id) {
+        try {
+          const eventId = session.metadata.event_id;
+
+          // Define strict interfaces for type safety and robust error handling
+          interface RevenueSplitConfig {
+            club_id: string;
+            pct: number;
+            stripe_account_id?: string;
+          }
+
+          interface TransferLog {
+            club_id: string;
+            amount_cents: number;
+            pct: number;
+            stripe_account_id: string;
+            transfer_id: string;
+          }
+
+          console.log(`[Profit-Sharing Engine] Initializing for Event ID: ${eventId}`);
+          console.log(`[Profit-Sharing Engine] Associated Stripe Session: ${session.id}`);
+
+          // Fetch the event's configured revenue splits
+          const { data: eventData, error: eventFetchError } = await supabase
+            .from("events")
+            .select("revenue_splits")
+            .eq("id", eventId)
+            .single();
+
+          if (eventFetchError) {
+            console.error(
+              `[Profit-Sharing Engine] Database Error fetching event ${eventId}:`,
+              eventFetchError.message,
+            );
+            throw new Error(`Failed to fetch event data: ${eventFetchError.message}`);
+          }
+
+          // Validate that the co-sponsorship contract exists and is populated
+          if (
+            eventData?.revenue_splits &&
+            Array.isArray(eventData.revenue_splits) &&
+            eventData.revenue_splits.length > 0
+          ) {
+            console.log(
+              `[Profit-Sharing Engine] Found ${eventData.revenue_splits.length} co-sponsoring clubs. Calculating splits...`,
+            );
+
+            // ----------------------------------------------------------------
+            // Step 1: Financial Math - Gross, Fees, and Net
+            // ----------------------------------------------------------------
+            const grossCents = session.amount_total ?? 0;
+
+            // Note: In production with precise Connect routing, you might query
+            // the exact Balance Transaction. Here we use the standard domestic
+            // card processing fee formula (2.9% + 30 cents).
+            const stripeFeeRate = 0.029;
+            const stripeFixedFeeCents = 30;
+
+            // Calculate exact fee and round to nearest whole cent
+            const stripeFeeCents = Math.round(grossCents * stripeFeeRate + stripeFixedFeeCents);
+
+            // The actual distributable pool of money
+            const netProfitCents = Math.max(0, grossCents - stripeFeeCents);
+
+            console.log(
+              `[Profit-Sharing Engine] Financials calculated -> Gross: ${grossCents}¢ | Fee: ${stripeFeeCents}¢ | Net: ${netProfitCents}¢`,
+            );
+
+            if (netProfitCents > 0) {
+              // ----------------------------------------------------------------
+              // Step 2: Proportional Allocation & Remainder Management
+              // ----------------------------------------------------------------
+              let remainingCents = netProfitCents;
+              const transfers: TransferLog[] = [];
+              const rawSplits = eventData.revenue_splits as RevenueSplitConfig[];
+
+              // We iterate through all splits except the last one to calculate
+              // exact math. The last split will sweep any fractional remainders.
+              for (let i = 0; i < rawSplits.length; i++) {
+                const split = rawSplits[i];
+                const isLast = i === rawSplits.length - 1;
+
+                let allocatedCents = 0;
+
+                if (isLast) {
+                  // The final club absorbs the remaining pennies to ensure the
+                  // total distributed exactly matches the net profit.
+                  allocatedCents = remainingCents;
+                } else {
+                  // Standard proportional allocation rounded to the nearest cent
+                  allocatedCents = Math.round(netProfitCents * (split.pct / 100.0));
+                  remainingCents -= allocatedCents;
+                }
+
+                if (allocatedCents > 0) {
+                  transfers.push({
+                    club_id: split.club_id,
+                    amount_cents: allocatedCents,
+                    pct: split.pct,
+                    stripe_account_id: split.stripe_account_id || "acct_unlinked",
+                    transfer_id: (session.payment_intent as string) || session.id,
+                  });
+                }
+              }
+
+              console.log(
+                `[Profit-Sharing Engine] Transfer allocation complete. Dispatching to RPC...`,
+              );
+
+              // ----------------------------------------------------------------
+              // Step 3: Atomic Database Execution
+              // ----------------------------------------------------------------
+              // We dispatch the allocations to the centralized RPC to ensure
+              // that all ledger balances are updated atomically within a single
+              // transaction. This prevents partial updates if the server crashes.
+              const { data: splitResult, error: splitError } = await supabase.rpc(
+                "process_cohost_revenue_split",
+                {
+                  p_event_id: eventId,
+                  p_charge_id: (session.payment_intent as string) || session.id,
+                  p_total_amount_cents: netProfitCents,
+                  p_transfers: transfers,
+                },
+              );
+
+              if (splitError) {
+                console.error(
+                  `[Profit-Sharing Engine] CRITICAL: RPC Execution Failed for Event ${eventId}`,
+                  splitError,
+                );
+                // We do not throw here to prevent blocking the rest of the webhook
+                // processing (e.g. ticket issuance), but we flag it aggressively.
+              } else {
+                console.log(
+                  `[Profit-Sharing Engine] Ledger transactions successful. Generating Split Receipt...`,
+                );
+
+                // ----------------------------------------------------------------
+                // Step 4: Generate Immutable Split Receipt
+                // ----------------------------------------------------------------
+                // Insert a permanent record into the receipts table so that
+                // Treasurers can transparently audit the fee deductions and math.
+                const { error: receiptError } = await supabase
+                  .from("revenue_split_receipts")
+                  .insert({
+                    event_id: eventId,
+                    stripe_session_id: session.id,
+                    gross_revenue_cents: grossCents,
+                    stripe_fee_cents: stripeFeeCents,
+                    net_profit_cents: netProfitCents,
+                    split_details: transfers,
+                  });
+
+                if (receiptError) {
+                  console.error(
+                    `[Profit-Sharing Engine] Failed to generate Split Receipt:`,
+                    receiptError,
+                  );
+                } else {
+                  console.log(
+                    `[Profit-Sharing Engine] Workflow complete. Transparency receipt issued.`,
+                  );
+                }
+              }
+            } else {
+              console.warn(
+                `[Profit-Sharing Engine] Net profit is zero or negative. Skipping allocations.`,
+              );
+            }
+          } else {
+            console.log(
+              `[Profit-Sharing Engine] Event ${eventId} has no co-sponsorship contracts. Proceeding normally.`,
+            );
+          }
+        } catch (err: any) {
+          console.error(`[Profit-Sharing Engine] Unhandled Exception:`, err.message, err.stack);
+        }
+      }
     }
 
     // 6. Refunds / disputes on a donation charge must decrement current_amount_cents
+
     // so the progress bar stays mathematically accurate. We resolve the donation
     // row by payment_intent_id (present on both charge.refunded and
     // charge.dispute.created payloads) rather than trusting client-supplied state.
