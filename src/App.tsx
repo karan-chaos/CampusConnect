@@ -188,6 +188,7 @@ const DynamicEarlyBirdAnalyticsRoute = lazy(
   () => import("./routes/events.$id.early-bird-analytics"),
 );
 const AchievementsPage = lazy(() => import("@/pages/AchievementsPage"));
+const ResourceBookingRoute = lazy(() => import("./routes/resource-booking"));
 const EventFeedbackPage = lazy(() => import("@/pages/EventFeedbackPage"));
 
 // ---------------------------------------------------------------------------
@@ -570,6 +571,9 @@ const router = createBrowserRouter(
 
               {/* Wellness */}
               <Route path="/wellness" element={<CampusWellnessHub />} />
+
+              {/* Resource Booking */}
+              <Route path="/resource-booking" element={<ResourceBookingRoute />} />
 
               {/* Achievements */}
               <Route path="/achievements" element={<AchievementsPage />} />
