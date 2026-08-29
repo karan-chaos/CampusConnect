@@ -188,6 +188,7 @@ const DynamicEarlyBirdAnalyticsRoute = lazy(
   () => import("./routes/events.$id.early-bird-analytics"),
 );
 const AchievementsPage = lazy(() => import("@/pages/AchievementsPage"));
+const ExpenseSplitterRoute = lazy(() => import("./routes/expense-splitter"));
 const EventFeedbackPage = lazy(() => import("@/pages/EventFeedbackPage"));
 
 // ---------------------------------------------------------------------------
@@ -570,6 +571,9 @@ const router = createBrowserRouter(
 
               {/* Wellness */}
               <Route path="/wellness" element={<CampusWellnessHub />} />
+
+              {/* Expense Splitter */}
+              <Route path="/expense-splitter" element={<ExpenseSplitterRoute />} />
 
               {/* Achievements */}
               <Route path="/achievements" element={<AchievementsPage />} />
