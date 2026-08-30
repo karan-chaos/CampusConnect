@@ -645,7 +645,6 @@ const router = createBrowserRouter(
 
               {/* Event Recommendation Engine */}
               <Route path="/recommendations" element={<EventRecommendationEngine />} />
-
               {/* Jury Duty Content Moderation DAO (Issue #5129) */}
               <Route path="/jury/review/:caseId" element={<JuryReviewRoute />} />
 
