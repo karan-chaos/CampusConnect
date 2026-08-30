@@ -187,6 +187,12 @@ const BundleDetailsRoute = lazy(() => import("./pages/BundleDetailsPage"));
 const EquipmentMarketplace = lazy(() => import("./routes/equipment"));
 const MentorshipDashboard = lazy(() => import("./routes/mentorship-dashboard"));
 const EventFeedbackAnalytics = lazy(() => import("./pages/EventFeedbackAnalytics"));
+const AttendanceAnalyticsDashboard = lazy(
+  () => import("@/components/analytics/AttendanceAnalyticsDashboard"),
+);
+const EventRecommendationEngine = lazy(
+  () => import("@/components/recommendations/EventRecommendationEngine"),
+);
 const CampusShuttleTracker = lazy(() => import("./pages/CampusShuttleTracker"));
 const CourseReviews = lazy(() => import("./pages/CourseReviews"));
 const CampusParkingSpotFinder = lazy(() => import("./pages/CampusParkingSpotFinder"));
@@ -618,6 +624,12 @@ const router = createBrowserRouter(
 
               {/* Event Feedback Analytics */}
               <Route path="/event-feedback" element={<EventFeedbackAnalytics />} />
+
+              {/* Attendance Analytics Dashboard */}
+              <Route path="/analytics/attendance" element={<AttendanceAnalyticsDashboard />} />
+
+              {/* Event Recommendation Engine */}
+              <Route path="/recommendations" element={<EventRecommendationEngine />} />
 
               {/* 404 */}
               <Route path="*" element={<NotFound />} />
