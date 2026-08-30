@@ -187,6 +187,7 @@ const BundleDetailsRoute = lazy(() => import("./pages/BundleDetailsPage"));
 const EquipmentMarketplace = lazy(() => import("./routes/equipment"));
 const MentorshipDashboard = lazy(() => import("./routes/mentorship-dashboard"));
 const EventFeedbackAnalytics = lazy(() => import("./pages/EventFeedbackAnalytics"));
+const CampusActivityHeatmap = lazy(() => import("@/components/heatmap/CampusActivityHeatmap"));
 const CampusShuttleTracker = lazy(() => import("./pages/CampusShuttleTracker"));
 const CourseReviews = lazy(() => import("./pages/CourseReviews"));
 const CampusParkingSpotFinder = lazy(() => import("./pages/CampusParkingSpotFinder"));
@@ -618,6 +619,9 @@ const router = createBrowserRouter(
 
               {/* Event Feedback Analytics */}
               <Route path="/event-feedback" element={<EventFeedbackAnalytics />} />
+
+              {/* Campus Activity Heatmap */}
+              <Route path="/analytics/heatmap" element={<CampusActivityHeatmap />} />
 
               {/* 404 */}
               <Route path="*" element={<NotFound />} />
