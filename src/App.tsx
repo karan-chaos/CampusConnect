@@ -208,6 +208,7 @@ const DynamicEarlyBirdAnalyticsRoute = lazy(
 const AchievementsPage = lazy(() => import("@/pages/AchievementsPage"));
 const ProjectHubRoute = lazy(() => import("./routes/project-hub"));
 const EventFeedbackPage = lazy(() => import("@/pages/EventFeedbackPage"));
+const VenueIntelligenceRoute = lazy(() => import("./routes/venue-intelligence"));
 
 // ---------------------------------------------------------------------------
 // Animated Outlet Wrapper for Framer Motion transitions with Skeleton Fallback
@@ -615,6 +616,9 @@ const router = createBrowserRouter(
 
               {/* Gallery */}
               <Route path="/gallery" element={<GalleryPage />} />
+
+              {/* Venue Intelligence */}
+              <Route path="/venue-intelligence" element={<VenueIntelligenceRoute />} />
 
               {/* Event Feedback Analytics */}
               <Route path="/event-feedback" element={<EventFeedbackAnalytics />} />
