@@ -3,13 +3,16 @@
 // Issues: #4145 - Interactive "Event Layout" Floorplan Builder
 //         #4157 - Interactive "Career Fair" Digital Map
 //         #4420 - Real-Time "Accessibility Need" Venue Map
+//         #5290 - Emergency Exit Evacuation Bottleneck Simulator
 // Description: Organizer-facing editor. Palette chips can be dragged onto the
 // grid (or clicked) to add tables/stages/exits. A selection inspector edits
 // labels, sizes and sponsor assignments (incl. comma-separated hiring_tags,
 // which power the attendee career-fair search). An accessibility palette
 // (#4420) drops static POIs - ramps, elevators, ADA bathrooms, stairs - that
 // drive the attendee wheelchair routing. Saves the layout to
-// events.floorplan_json and can export the raw JSON contract.
+// events.floorplan_json and can export the raw JSON contract. A layout whose
+// simulated Time To Evacuate (#5290) exceeds the fire marshal's limit cannot be
+// saved at all: the button is disabled and the violation is stated in seconds.
 // =============================================================================
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -28,8 +31,10 @@ import Save from "lucide-react/dist/esm/icons/save";
 import Download from "lucide-react/dist/esm/icons/download";
 import TriangleAlert from "lucide-react/dist/esm/icons/triangle-alert";
 import Accessibility from "lucide-react/dist/esm/icons/accessibility";
+import Users from "lucide-react/dist/esm/icons/users";
 
 import { FloorplanCanvas } from "./FloorplanCanvas";
+import { CrowdSimulationOverlay } from "../crowdSimulation/CrowdSimulationOverlay";
 import {
   AccessibilityPoiKind,
   AssetKind,
@@ -39,6 +44,7 @@ import {
   VenueBounds,
 } from "../../../lib/floorplan/types";
 import { describeAssignment, toFloorplanState } from "../../../lib/floorplan/serialize";
+import { EvacuationSimulation, describeBottleneck } from "../../../lib/floorplan/evacuation";
 import { parseHiringTags } from "../../../lib/floorplan/search";
 import type { EventLayoutZone } from "../../../lib/eventLayoutHeatmap";
 
@@ -74,6 +80,10 @@ interface FloorplanEditorProps {
   /** #4722 live occupancy overlay from zone door QR scans. */
   heatmapZones?: EventLayoutZone[];
   onZoneDoorClick?: (zone: EventLayoutZone) => void;
+  /** #5290 mandatory evacuation simulation for the layout on screen. */
+  evacuation?: EvacuationSimulation;
+  /** #5290 message from the last save the simulation rejected. */
+  saveError?: string | null;
 }
 
 function PaletteChip({ kind, onClick }: { kind: AssetKind; onClick: (kind: AssetKind) => void }) {
@@ -168,9 +178,12 @@ export const FloorplanEditor: React.FC<FloorplanEditorProps> = ({
   onRemovePoi,
   heatmapZones,
   onZoneDoorClick,
+  evacuation,
+  saveError,
 }) => {
   const canvasWrapRef = useRef<HTMLDivElement>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showCrowdSim, setShowCrowdSim] = useState<boolean>(false);
 
   // Sponsor assignment form state for the selected asset
   const pois = venue.accessibility_pois ?? [];
@@ -256,10 +269,20 @@ export const FloorplanEditor: React.FC<FloorplanEditorProps> = ({
   );
 
   const handleSave = useCallback(async () => {
+    // #5290: refuse locally as well as in the service. Letting the click through
+    // to a thrown error would still block the write, but the organizer would read
+    // a failure instead of the seconds they have to shave off.
+    if (evacuation && !evacuation.compliant) {
+      toast.error(evacuation.violationMessage ?? "Layout cannot be evacuated in time.");
+      return;
+    }
     const ok = await onSave();
     if (ok) toast.success("Floorplan saved");
     else toast.error("Could not save floorplan. Please try again.");
-  }, [onSave]);
+  }, [evacuation, onSave]);
+
+  const evacuationBlocked = Boolean(evacuation && !evacuation.compliant);
+  const blockingMessage = evacuationBlocked ? evacuation!.violationMessage : (saveError ?? null);
 
   const handleExport = useCallback(() => {
     const doc = toFloorplanState(assets, venue);
@@ -385,10 +408,57 @@ export const FloorplanEditor: React.FC<FloorplanEditorProps> = ({
               </ul>
             </div>
           )}
+
+          {/* #5290 mandatory evacuation simulation */}
+          {evacuation && (
+            <div
+              data-testid="evacuation-simulation"
+              className={`neu-border p-3 font-mono text-xs shadow-[2px_2px_0_0_#000] ${
+                evacuation.compliant
+                  ? "border-emerald-600 bg-emerald-50 text-emerald-800"
+                  : "border-red-500 bg-red-50 text-red-700"
+              }`}
+            >
+              <p className="flex items-center gap-1 font-bold uppercase">
+                <TriangleAlert size={14} /> Evacuation simulation
+              </p>
+              <p className="mt-1">
+                {evacuation.occupants} occupants · TTE{" "}
+                <strong data-testid="evacuation-tte">{Math.ceil(evacuation.tteSec)}s</strong> /
+                limit {evacuation.limitSec}s
+              </p>
+              <p className="mt-1">{describeBottleneck(evacuation)}</p>
+              <ul className="mt-2 space-y-0.5">
+                {evacuation.doors.map((door) => (
+                  <li key={door.doorId}>
+                    {door.label}: {door.assignedOccupants} @ {door.flowPerSec}/s ={" "}
+                    {Math.ceil(door.clearanceSec)}s
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </aside>
 
         {/* Canvas */}
         <div className="space-y-3">
+          {showCrowdSim && (
+            <CrowdSimulationOverlay
+              layoutElements={assets.map((a) => ({
+                id: a.id,
+                type: a.kind,
+                x: a.x * 8, // scale feet to px (FT_TO_PX = 8)
+                y: a.y * 8,
+                width: a.width * 8,
+                height: a.height * 8,
+                label: a.label,
+              }))}
+              width={venue.width_ft * 8}
+              height={venue.height_ft * 8}
+              onClose={() => setShowCrowdSim(false)}
+            />
+          )}
+
           <div
             ref={(node) => {
               setDropRef(node);
@@ -420,16 +490,37 @@ export const FloorplanEditor: React.FC<FloorplanEditorProps> = ({
             />
           </div>
 
+          {blockingMessage && (
+            <div
+              role="alert"
+              data-testid="evacuation-violation"
+              className="neu-border border-red-500 bg-[#7f1d1d] p-3 font-mono text-xs text-white shadow-[2px_2px_0_0_#000]"
+            >
+              {blockingMessage}
+            </div>
+          )}
+
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
+              onClick={() => setShowCrowdSim(!showCrowdSim)}
+              data-testid="floorplan-crowd-sim-toggle"
+              className={`neu-border neu-press flex h-10 items-center gap-2 px-4 font-mono text-xs font-bold uppercase tracking-wider shadow-[2px_2px_0_0_#000] ${
+                showCrowdSim ? "bg-amber-300" : "bg-sky"
+              }`}
+            >
+              <Users size={14} />
+              {showCrowdSim ? "Hide Simulation" : "Crowd Flow Sim"}
+            </button>
+            <button
+              type="button"
               onClick={handleSave}
-              disabled={isSaving}
+              disabled={isSaving || evacuationBlocked}
               data-testid="floorplan-save"
               className="neu-border neu-press flex h-10 items-center gap-2 bg-lime px-4 font-mono text-xs font-bold uppercase tracking-wider shadow-[2px_2px_0_0_#000] disabled:opacity-60"
             >
               <Save size={14} />
-              {isSaving ? "Saving…" : "Save layout"}
+              {isSaving ? "Saving…" : evacuationBlocked ? "Save blocked" : "Save layout"}
             </button>
             <button
               type="button"

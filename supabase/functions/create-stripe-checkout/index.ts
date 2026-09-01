@@ -1,6 +1,9 @@
 // =============================================================================
 // Edge Function: Create Stripe Checkout Session (with Group Discounts)
 // Issue: #2902 - Implement 'Group Discounts' for Event Ticketing
+// Description: Creates a Stripe Checkout session.Validates the requested
+// quantity against remaining capacity, calculates the group discount, and
+// applies it as a negative line item(discount) in the Stripe session.
 // Description: Creates a Stripe Checkout session. Validates the requested
 // quantity against remaining capacity, calculates the group discount, and
 // applies it as a negative line item (discount) in the Stripe session.
@@ -9,6 +12,7 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Stripe from "https://esm.sh/stripe@13.0.0?target=deno";
+import { Redis } from "https://esm.sh/@upstash/redis@1.30.0";
 import {
   AFFILIATE_SOURCE_METADATA_KEY,
   buildAffiliateSourceMetadata,
@@ -118,6 +122,27 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_ANON_KEY") ?? "",
       { global: { headers: { Authorization: authHeader } } },
     );
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) throw new Error("Unauthorized");
+
+    // 2. Parse Request
+    const { eventId, quantity } = await req.json();
+    if (!eventId || !quantity || quantity < 1) {
+      throw new Error("Invalid event ID or quantity");
+    }
+
+
+  try {
+    // 1. Authenticate User
+    const authHeader = req.headers.get("Authorization")!;
+    const supabase = createClient(
+      Deno.env.get("SUPABASE_URL") ?? "",
+      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+      { global: { headers: { Authorization: authHeader } } },
+    );
     const adminSupabase = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
@@ -170,6 +195,96 @@ serve(async (req) => {
     const { data: activeTiers, error: tierError } = await supabase.rpc("get_active_ticket_tier", {
       p_event_id: eventId,
     });
+
+    if (tierError || !activeTiers || activeTiers.length === 0) {
+      throw new Error("No ticket tier is currently available");
+    }
+
+    const tier = activeTiers[0];
+
+    const { data: event, error: eventError } = await supabase
+      .from("events")
+      .select("title, surge_config")
+      .eq("id", eventId)
+      .single();
+
+    if (eventError || !event) {
+      throw new Error("Event not found");
+    }
+
+    const remainingCapacity = tier.capacity !== null ? tier.capacity - tier.sold_count : Infinity;
+
+    if (quantity > remainingCapacity) {
+      throw new Error(`Only ${remainingCapacity} tickets remaining for the current tier.`);
+    }
+
+    // --- SURGE PRICING LOGIC ---
+    let basePriceCents = tier.price;
+    let isSurgeActive = false;
+    const surgeConfig = event.surge_config || { enabled: false, threshold: 10, multiplier: 1.2 };
+
+    if (surgeConfig.enabled) {
+      const redisUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
+      const redisToken = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
+      if (redisUrl && redisToken) {
+        try {
+          const redis = new Redis({ url: redisUrl, token: redisToken });
+          const now = Date.now();
+          const oneMinuteAgo = now - 60000;
+          const key = `sales_velocity:${eventId}`;
+
+          // Clean up old entries
+          await redis.zremrangebyscore(key, 0, oneMinuteAgo);
+          // Get current count in the sliding window
+          const salesVelocity = await redis.zcard(key);
+
+          if (salesVelocity >= surgeConfig.threshold) {
+            isSurgeActive = true;
+            basePriceCents = Math.round(basePriceCents * surgeConfig.multiplier);
+            console.log(
+              `[Surge Pricing] Active for ${eventId}. Velocity: ${salesVelocity}. New price: ${basePriceCents}`,
+            );
+          }
+        } catch (redisErr) {
+          console.error("[Surge Pricing] Redis error (falling back to standard price):", redisErr);
+        }
+      }
+    }
+    // -----------------------------
+
+    // 4. Calculate Discount
+    const rules: DiscountRule[] = tier.discount_rules || [];
+    const sortedRules = [...rules].sort((a, b) => b.min_qty - a.min_qty);
+
+    let applicableDiscount = 0;
+    for (const rule of sortedRules) {
+      if (quantity >= rule.min_qty) {
+        applicableDiscount = rule.discount_pct;
+        break;
+      }
+    }
+
+    const subtotal = basePriceCents * quantity;
+    const discountAmount = Math.round(subtotal * (applicableDiscount / 100));
+    const totalAmount = subtotal - discountAmount;
+
+    // 5. Build Stripe Line Items
+    const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [
+      {
+        price_data: {
+          currency: "usd",
+          product_data: {
+            name: `${event.title} - ${tier.name}${isSurgeActive ? " (High Demand Pricing)" : ""}`,
+            description: `${quantity} ticket(s)`,
+          },
+          unit_amount: basePriceCents,
+        },
+        quantity: quantity,
+      },
+    ];
+
+    // Apply discount as a negative line item if applicable
+    if (discountAmount > 0) {
 
     if (tierError || !activeTiers || activeTiers.length === 0) {
       throw new Error("No ticket tier is currently available");
@@ -463,6 +578,15 @@ serve(async (req) => {
         price_data: {
           currency: "usd",
           product_data: {
+            name: `Group Discount (${applicableDiscount}% off)`,
+          },
+          unit_amount: -discountAmount, // Negative amount for discount
+        },
+        quantity: 1,
+      });
+    }
+
+    // 6. Create Stripe Checkout Session
             name: "CampusConnect Platform Credit",
           },
           unit_amount: -creditToApply,
@@ -533,6 +657,21 @@ serve(async (req) => {
       metadata: {
         user_id: user.id,
         tier_id: tier.id,
+        quantity: quantity.toString(),
+        discount_applied: applicableDiscount.toString(),
+        event_id: eventId,
+        surge_active: isSurgeActive ? "true" : "false",
+      },
+      // Enforce "All or Nothing" refund policy for group purchases
+      payment_intent_data: {
+        setup_future_usage: "off_session",
+      },
+    });
+
+    return new Response(JSON.stringify({ sessionId: session.id, url: session.url }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      status: 200,
+    });
         quantity: totalQuantity.toString(),
         discount_applied: applicableDiscount.toString(),
         credit_applied_cents: creditToApply.toString(),
