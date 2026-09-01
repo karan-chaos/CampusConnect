@@ -14,6 +14,16 @@ import { User } from "@supabase/supabase-js";
 import { useEmailVerification } from "@/hooks/useEmailVerification";
 import { SiteShell } from "@/components/site/SiteShell";
 import { AslAvatarPip } from "@/components/events/AslAvatarPip";
+import { AudioDescriptionSyncWidget } from "@/components/events/AudioDescriptionSyncWidget";
+import { LiveTranslationEarpiecePanel } from "@/components/events/LiveTranslationEarpiecePanel";
+import { EscrowDonationWidget } from "@/components/events/EscrowDonationWidget";
+import { SkillMatcherWidget } from "@/components/events/SkillMatcherWidget";
+import { OfacCompliancePanel } from "@/components/events/OfacCompliancePanel";
+import { HoneyPotTrapWidget } from "@/components/events/HoneyPotTrapWidget";
+import { DafDonationWidget } from "@/components/events/DafDonationWidget";
+import { ParametricInsuranceWidget } from "@/components/events/ParametricInsuranceWidget";
+import { WifiProvisioningWidget } from "@/components/events/WifiProvisioningWidget";
+import { LipSyncCheckerWidget } from "@/components/events/LipSyncCheckerWidget";
 import { SkeletonEventDetails } from "@/components/events/SkeletonEventDetails";
 import { EventSeatingManager } from "@/components/events/EventSeatingManager";
 import { SilentAuctionSection } from "@/components/events/SilentAuctionSection";
@@ -32,6 +42,7 @@ import { TicketPricingTimeline } from "@/components/events/TicketPricingTimeline
 import { FlashSaleBanner } from "@/components/events/FlashSaleBanner";
 import { FlashSaleControl } from "@/components/events/FlashSaleControl";
 import { DutchAuctionPanel } from "@/components/events/DutchAuctionPanel";
+import { TicketSliceMarketplace } from "@/components/tickets/TicketSliceMarketplace";
 import { formatDateLong } from "@/lib/dateFormatter";
 import { getRsvpIdempotencyKey, clearRsvpIdempotencyKey } from "@/lib/rsvpIdempotency";
 import { toast } from "sonner";
@@ -110,6 +121,7 @@ import { ReportAccessibilityIssueDialog } from "@/components/events/ReportAccess
 import { ManageAccessibilityOverridesDialog } from "@/components/events/ManageAccessibilityOverridesDialog";
 import EventFeedbackForm from "@/components/EventFeedbackForm";
 import { EventSeriesCatchUpCard } from "@/components/events/EventSeriesCatchUpCard";
+import { VendingMachineIntegration } from "@/components/events/VendingMachineIntegration";
 import { EventPhotoGallery } from "@/components/EventPhotoGallery";
 import { PredictiveTurnout } from "@/components/events/PredictiveTurnout";
 import {
@@ -148,6 +160,7 @@ import { CaptchaWidget } from "@/components/CaptchaWidget";
 import { Blurhash } from "react-blurhash";
 import { isValidBlurhash, DEFAULT_FALLBACK_BLURHASH } from "@/lib/blurhashUtils";
 import { EventDescriptionTranslation } from "@/components/events/EventDescriptionTranslation";
+import { EventTransitSyncWidget } from "@/components/events/EventTransitSyncWidget";
 import { useDeviceFingerprint } from "@/hooks/useDeviceFingerprint";
 import { WaitlistBiddingLeaderboard } from "@/components/events/WaitlistBiddingLeaderboard";
 
@@ -691,7 +704,7 @@ export default function EventDetailsPage() {
           venues (
             name, building, capacity, accessibility_features, latitude, longitude, geofence_radius_meters
           ),
-          id, title, description, event_date, start_date, end_date, location, banner_url, created_by, is_high_risk, is_high_demand, status, short_id, max_attendees, requires_approval, category_id, tags, version, version_vector, blurhash, latitude, longitude, geofencing_enabled, geofence_radius_meters, accommodation_deadline, dress_code, base_price, surge_multiplier, is_bidding_enabled,
+          id, title, description, event_date, start_date, end_date, location, banner_url, created_by, is_high_risk, is_high_demand, status, short_id, max_attendees, requires_approval, category_id, tags, version, version_vector, blurhash, latitude, longitude, geofencing_enabled, geofence_radius_meters, accommodation_deadline, dress_code, base_price, surge_multiplier, is_bidding_enabled, audio_description_url, audio_description_enabled,
           profiles (full_name, email),
           event_metrics (views)
         `,
@@ -1324,24 +1337,20 @@ export default function EventDetailsPage() {
         return { alreadyCheckedIn: true };
       }
 
-      const { error } = await supabase
-        .from("event_rsvps")
-        .update({ checked_in: true })
-        .eq("id", rsvpId)
-        .eq("event_id", eventId);
+      const { data: transition, error } = await supabase.rpc("transition_event_attendance", {
+        p_rsvp_id: rsvpId,
+        p_to_state: "checked_in",
+        p_reason: "Organizer check-in",
+      });
 
       if (error) throw error;
 
-      try {
-        await supabase.from("event_attendance_logs").insert({
-          rsvp_id: rsvpId,
-          recorded_by: user.id,
-          // Distinguishes this manual/QR-adjacent organizer action from an
-          // attendee's own GPS-verified self check-in (see check_in_via_geofence).
-          verification_method: "organizer_override",
-        });
-      } catch {
-        // Attendance logging is optional if the table is unavailable in the current environment.
+      if (!transition?.success) {
+        if (transition?.code === "ALREADY_CHECKED_IN") {
+          return { alreadyCheckedIn: true };
+        }
+
+        throw new Error(transition?.message || transition?.code || "Unable to check in attendee.");
       }
 
       return { alreadyCheckedIn: false };
@@ -1984,6 +1993,7 @@ export default function EventDetailsPage() {
 
             <div id="ticket-pricing-section" className="mt-6 max-w-2xl space-y-4">
               <DutchAuctionPanel eventId={event.id} />
+              <TicketSliceMarketplace eventId={event.id} />
               <FlashSaleBanner eventId={event.id} />
               <TicketPricingTimeline eventId={event.id} isOrganizer={isOrganizer} />
               {isOrganizer && (
@@ -2705,6 +2715,14 @@ export default function EventDetailsPage() {
                     >
                       Open in Google Maps ↗
                     </a>
+
+                    <div className="mt-6">
+                      <EventTransitSyncWidget
+                        venueLatitude={coordsCheck.lat}
+                        venueLongitude={coordsCheck.lng}
+                        venueName={event.title}
+                      />
+                    </div>
                   </>
                 ) : coordsCheck.isCoordinates && !coordsCheck.isValid ? (
                   <div className="neu-border mt-4 flex items-start gap-4 bg-peach/20 p-5">
@@ -3707,6 +3725,36 @@ export default function EventDetailsPage() {
             />
           </div>
         )}
+        <AudioDescriptionSyncWidget
+          eventId={eventId || ""}
+          audioDescriptionUrl={event?.audio_description_url || null}
+          videoElement={null}
+        />
+        <LiveTranslationEarpiecePanel
+          eventId={eventId || ""}
+          userId={user?.id ?? null}
+          isOrganizer={isOrganizer}
+          isCheckedIn={Boolean(myRsvp?.checked_in)}
+        />
+        <EscrowDonationWidget
+          clubId={event?.clubs?.name || ""}
+          clubWalletAddress="0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+          userRole={user?.id === event?.created_by ? "club" : "donor"}
+        />
+        <SkillMatcherWidget
+          userRole={user?.id === event?.created_by ? "recruiter" : "student"}
+          sponsorId={event?.created_by || ""}
+          companyName={event?.clubs?.name || ""}
+        />
+        <OfacCompliancePanel />
+        <HoneyPotTrapWidget />
+        <DafDonationWidget
+          clubId={event?.clubs?.id || ""}
+          clubWalletAddress="0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+        />
+        <ParametricInsuranceWidget eventId={eventId || ""} />
+        <WifiProvisioningWidget targetCampus={event?.location || "MIT"} userId={user?.id || ""} />
+        <LipSyncCheckerWidget userId={user?.id || ""} />
         <AslAvatarPip eventId={eventId || ""} />
       </SiteShell>
     </>
